@@ -1,0 +1,14 @@
+*.bat
+*.sln
+*.vcproj
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+compilation.log
+MyStrategy-old
+MyStrategy
+
+opt/opt
+opt/log.txt
+opt/restart.dat
+opt/games
