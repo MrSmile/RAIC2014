@@ -54,10 +54,7 @@ bool CPassiveSocket::BindMulticast(const uint8 *pInterface, const uint8 *pGroup,
 #ifdef WIN32
     ULONG          inAddr;
 #else
-    int32          nReuse;
     in_addr_t      inAddr;
-
-    nReuse = IPTOS_LOWDELAY;
 #endif
 
     //--------------------------------------------------------------------------
