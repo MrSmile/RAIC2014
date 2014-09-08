@@ -138,13 +138,63 @@ inline constexpr Vec2D conj(const Vec2D &v)
 
 
 
+struct Predictor
+{
+    Vec2D pos, spd;
+    double angle;
+
+    void set(const Unit& unit)
+    {
+        pos = Vec2D(unit.getX(), unit.getY());
+        spd = Vec2D(unit.getSpeedX(), unit.getSpeedY());
+        angle = unit.getAngle();
+    }
+
+    void predict(double accel, double turn)
+    {
+        spd += accel * sincos(angle);  spd -= 0.02 * spd;  pos += spd;  angle += turn;
+    }
+};
+
+
+Predictor hockeyist[6];
+
 void MyStrategy::move(const Hockeyist& self, const World& world, const Game& game, Move& move)
 {
-    move.setSpeedUp(-1.0);
-    move.setTurn(pi);
-    move.setAction(STRIKE);
+    /*
+    if(!self.getTeammateIndex())
+    {
+        auto list = world.getHockeyists();  Vec2D goalie[2];
+        for(auto &hockeyist : list)if(hockeyist.getType() == GOALIE)
+            goalie[hockeyist.isTeammate() ? 0 : 1] = Vec2D(hockeyist.getX(), hockeyist.getY());
+
+        auto puck = world.getPuck();
+        Vec2D puckPos(puck.getX(), puck.getY()), puckSpd(puck.getSpeedX(), puck.getSpeedY());
+
+        cout << puckPos.x << ' ' << puckPos.y << "   ";
+        cout << puckSpd.x << ' ' << puckSpd.y << "   ";
+        cout << goalie[0].x << ' ' << goalie[0].y << "   ";
+        cout << goalie[1].x << ' ' << goalie[1].y << endl;
+    }
+    */
+
+    auto &hock = hockeyist[self.getTeammateIndex()];
+    if(world.getTick())
+    {
+        cout << (hock.pos.x - self.getX()) << ' ' << (hock.pos.y - self.getY()) << ' ';
+        cout << (hock.spd.x - self.getSpeedX()) << ' ' << (hock.spd.y - self.getSpeedY()) << ' ';
+        cout << (rem(hock.angle - self.getAngle() + pi, 2 * pi) - pi) << endl;
+    }
+
+    double accel = rand() * (2.0 / RAND_MAX) - 1;
+    double turn = (rand() * (2.0 / RAND_MAX) - 1) * game.getHockeyistTurnAngleFactor();
+    move.setSpeedUp(accel);  move.setTurn(turn);  move.setAction(NONE);
+
+    accel *= accel > 0 ? game.getHockeyistSpeedUpFactor() : game.getHockeyistSpeedDownFactor();
+    hock.set(self);  hock.predict(accel, turn);
 }
 
 MyStrategy::MyStrategy()
 {
+    cout << setprecision(16);
 }
