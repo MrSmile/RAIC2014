@@ -161,12 +161,14 @@ Predictor hockeyist[6];
 
 void MyStrategy::move(const Hockeyist& self, const World& world, const Game& game, Move& move)
 {
+    /*
     const auto &player = world.getMyPlayer();
     if(player.isJustMissedGoal() || player.isJustScoredGoal())
     {
         move.setTurn(self.getTeammateIndex() & 1 ? -pi : pi);
         move.setSpeedUp(0);  move.setAction(NONE);  return;
     }
+    */
 
     /*
     if(!self.getTeammateIndex())
@@ -195,8 +197,8 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     }
     */
 
-    double accel = rand() * (2.0 / RAND_MAX) - 1;
-    double turn = (rand() * (2.0 / RAND_MAX) - 1) * game.getHockeyistTurnAngleFactor();
+    double accel = 0;//rand() * (2.0 / RAND_MAX) - 1;
+    double turn = 0;//(rand() * (2.0 / RAND_MAX) - 1) * game.getHockeyistTurnAngleFactor();
     move.setSpeedUp(accel);  move.setTurn(turn);  move.setAction(NONE);
 
     accel *= accel > 0 ? game.getHockeyistSpeedUpFactor() : game.getHockeyistSpeedDownFactor();
@@ -206,54 +208,86 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     if(!self.getTeammateIndex())
     {
         const auto &puck = world.getPuck();
-        static double x_min = game.getRinkLeft() + puck.getRadius();
-        static double x_max = game.getRinkRight() - puck.getRadius();
-        static double y_min = game.getRinkTop() + puck.getRadius();
-        static double y_max = game.getRinkBottom() - puck.getRadius();
+        static const double rinkLeft = game.getRinkLeft() + puck.getRadius();
+        static const double rinkRight = game.getRinkRight() - puck.getRadius();
+        static const double rinkTop = game.getRinkTop() + puck.getRadius();
+        static const double rinkBottom = game.getRinkBottom() - puck.getRadius();
+        static const double goalTop = game.getGoalNetTop() + self.getRadius();
+        static const double goalBottom = game.getGoalNetTop() + game.getGoalNetHeight() - self.getRadius();
+        static const double goalieSpd = game.getGoalieMaxSpeed();
+        static const double rad = self.getRadius() + puck.getRadius();
+        constexpr double /*hockeyistFrict = 0.02,*/ puckFrict = 0.001;
+        constexpr double wallCoeff = 0.25, goalieCoeff = 0.325, goalieFrict = 0.1;
+        constexpr double minDepth = 0.01, depthFactor = 0.8;
 
         static bool fly = false;
-        static Vec2D oldPos, oldSpd;
+        static Vec2D oldPos, oldSpd, goalie[2];
         if(puck.getOwnerHockeyistId() < 0)
         {
             Vec2D pos(puck.getX(), puck.getY()), spd(puck.getSpeedX(), puck.getSpeedY());
             if(fly)
             {
-                if(oldPos.x < x_min && oldSpd.x < 0)
+                bool flag = false;
+                if(oldPos.x < rinkLeft && oldSpd.x < 0)
                 {
-                    double delta = oldPos.x - x_min + 0.01;
-                    cout << "HIT X: " << delta << ' ' << (pos.x + 0.25 * 0.999 * oldSpd.x - x_min) << ' ' << oldSpd.x << endl;
-                    oldSpd.x *= -0.25;  if(oldSpd.x < -delta)oldPos.x -= 0.8 * delta;
+                    double delta = oldPos.x - rinkLeft + minDepth;
+                    oldSpd.x *= -wallCoeff;  if(oldSpd.x < -delta)oldPos.x -= depthFactor * delta;
+                    //if(!(oldSpd.x < -delta))flag = true;
 
                 }
-                if(oldPos.x > x_max && oldSpd.x > 0)
+                if(oldPos.x > rinkRight && oldSpd.x > 0)
                 {
-                    double delta = oldPos.x - x_max - 0.01;
-                    cout << "HIT X: " << delta << ' ' << (pos.x + 0.25 * 0.999 * oldSpd.x - x_max) << ' ' << oldSpd.x << endl;
-                    oldSpd.x *= -0.25;  if(oldSpd.x > -delta)oldPos.x -= 0.8 * delta;
+                    double delta = oldPos.x - rinkRight - minDepth;
+                    oldSpd.x *= -wallCoeff;  if(oldSpd.x > -delta)oldPos.x -= depthFactor * delta;
+                    //if(!(oldSpd.x > -delta))flag = true;
                 }
-                if(oldPos.y < y_min && oldSpd.y < 0)
+                if(oldPos.y < rinkTop && oldSpd.y < 0)
                 {
-                    double delta = oldPos.y - y_min + 0.01;
-                    cout << "HIT Y: " << delta << ' ' << (pos.y + 0.25 * 0.999 * oldSpd.y - y_min) << ' ' << oldSpd.y << endl;
-                    oldSpd.y *= -0.25;  if(oldSpd.y < -delta)oldPos.y -= 0.8 * delta;
+                    double delta = oldPos.y - rinkTop + minDepth;
+                    oldSpd.y *= -wallCoeff;  if(oldSpd.y < -delta)oldPos.y -= depthFactor * delta;
+                    //if(!(oldSpd.y < -delta))flag = true;
                 }
-                if(oldPos.y > y_max && oldSpd.y > 0)
+                if(oldPos.y > rinkBottom && oldSpd.y > 0)
                 {
-                    double delta = oldPos.y - y_max - 0.01;
-                    cout << "HIT Y: " << delta << ' ' << (pos.y + 0.25 * 0.999 * oldSpd.y - y_max) << ' ' << oldSpd.y << endl;
-                    oldSpd.y *= -0.25;  if(oldSpd.y > -delta)oldPos.y -= 0.8 * delta;
+                    double delta = oldPos.y - rinkBottom - minDepth;
+                    oldSpd.y *= -wallCoeff;  if(oldSpd.y > -delta)oldPos.y -= depthFactor * delta;
+                    //if(!(oldSpd.y > -delta))flag = true;
                 }
+                for(int i = 0; i < 2; i++)
+                {
+                    Vec2D delta(goalie[i] - oldPos);  if(!(delta.sqr() < rad * rad))continue;
+                    double dot = oldSpd * delta;  if(!(dot > 0))continue;
+                    double impDot = (1 + goalieCoeff) * dot, impCross = goalieFrict * impDot;
+                    impCross = max(-impCross, min(impCross, oldSpd % delta));
 
-                oldSpd -= 0.001 * oldSpd;  oldPos += oldSpd;
+                    double invLen2 = 1 / delta.sqr();
+                    double depth = ((rad - minDepth) * sqrt(invLen2) - 1);
+                    if((impDot - dot) * invLen2 < depth)oldPos -= depthFactor * depth * delta;
+                    oldSpd -= (impDot * delta + impCross * ~delta) * invLen2;
+                    //if(!((impDot - dot) * invLen2 < depth))flag = true;
+                }
+                if(flag)cout << "!!! ";
+
+                oldSpd -= puckFrict * oldSpd;  oldPos += oldSpd;
                 Vec2D errPos = pos - oldPos, errSpd = spd - oldSpd;
-                if(abs(errPos.x) > 1e-3 || abs(errPos.y) > 1e-3 || abs(errSpd.x) > 1e-5 || abs(errSpd.y) > 1e-5)
+                if(abs(errPos.x) > 1e-3 || abs(errPos.y) > 1e-3 || abs(errSpd.x) > 1e-4 || abs(errSpd.y) > 1e-4)
                 {
                     cout << "Error: ";
                     cout << (pos.x - oldPos.x) << ' ' << (pos.y - oldPos.y) << ' ';
                     cout << (spd.x - oldSpd.x) << ' ' << (spd.y - oldSpd.y) << endl;
                 }
+                else if(flag)cout << "OK" << endl;
             }
             oldPos = pos;  oldSpd = spd;  fly = true;
+
+            const auto &hockeyists = world.getHockeyists();
+            for(auto &hockeyist : hockeyists)if(hockeyist.getType() == GOALIE)
+            {
+                Vec2D cur = Vec2D(hockeyist.getX(), hockeyist.getY());
+                cur.y = max(cur.y - goalieSpd, min(cur.y + goalieSpd, pos.y));
+                cur.y = max(goalTop, min(goalBottom, cur.y));
+                goalie[hockeyist.isTeammate() ? 0 : 1] = cur;
+            }
         }
         else fly = false;
     }
