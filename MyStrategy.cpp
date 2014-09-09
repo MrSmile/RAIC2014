@@ -161,6 +161,13 @@ Predictor hockeyist[6];
 
 void MyStrategy::move(const Hockeyist& self, const World& world, const Game& game, Move& move)
 {
+    const auto &player = world.getMyPlayer();
+    if(player.isJustMissedGoal() || player.isJustScoredGoal())
+    {
+        move.setTurn(self.getTeammateIndex() & 1 ? -pi : pi);
+        move.setSpeedUp(0);  move.setAction(NONE);  return;
+    }
+
     /*
     if(!self.getTeammateIndex())
     {
@@ -179,12 +186,14 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     */
 
     auto &hock = hockeyist[self.getTeammateIndex()];
+    /*
     if(world.getTick())
     {
         cout << (hock.pos.x - self.getX()) << ' ' << (hock.pos.y - self.getY()) << ' ';
         cout << (hock.spd.x - self.getSpeedX()) << ' ' << (hock.spd.y - self.getSpeedY()) << ' ';
         cout << (rem(hock.angle - self.getAngle() + pi, 2 * pi) - pi) << endl;
     }
+    */
 
     double accel = rand() * (2.0 / RAND_MAX) - 1;
     double turn = (rand() * (2.0 / RAND_MAX) - 1) * game.getHockeyistTurnAngleFactor();
@@ -192,6 +201,62 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
 
     accel *= accel > 0 ? game.getHockeyistSpeedUpFactor() : game.getHockeyistSpeedDownFactor();
     hock.set(self);  hock.predict(accel, turn);
+
+
+    if(!self.getTeammateIndex())
+    {
+        const auto &puck = world.getPuck();
+        static double x_min = game.getRinkLeft() + puck.getRadius();
+        static double x_max = game.getRinkRight() - puck.getRadius();
+        static double y_min = game.getRinkTop() + puck.getRadius();
+        static double y_max = game.getRinkBottom() - puck.getRadius();
+
+        static bool fly = false;
+        static Vec2D oldPos, oldSpd;
+        if(puck.getOwnerHockeyistId() < 0)
+        {
+            Vec2D pos(puck.getX(), puck.getY()), spd(puck.getSpeedX(), puck.getSpeedY());
+            if(fly)
+            {
+                if(oldPos.x < x_min && oldSpd.x < 0)
+                {
+                    double delta = oldPos.x - x_min + 0.01;
+                    cout << "HIT X: " << delta << ' ' << (pos.x + 0.25 * 0.999 * oldSpd.x - x_min) << ' ' << oldSpd.x << endl;
+                    oldSpd.x *= -0.25;  if(oldSpd.x < -delta)oldPos.x -= 0.8 * delta;
+
+                }
+                if(oldPos.x > x_max && oldSpd.x > 0)
+                {
+                    double delta = oldPos.x - x_max - 0.01;
+                    cout << "HIT X: " << delta << ' ' << (pos.x + 0.25 * 0.999 * oldSpd.x - x_max) << ' ' << oldSpd.x << endl;
+                    oldSpd.x *= -0.25;  if(oldSpd.x > -delta)oldPos.x -= 0.8 * delta;
+                }
+                if(oldPos.y < y_min && oldSpd.y < 0)
+                {
+                    double delta = oldPos.y - y_min + 0.01;
+                    cout << "HIT Y: " << delta << ' ' << (pos.y + 0.25 * 0.999 * oldSpd.y - y_min) << ' ' << oldSpd.y << endl;
+                    oldSpd.y *= -0.25;  if(oldSpd.y < -delta)oldPos.y -= 0.8 * delta;
+                }
+                if(oldPos.y > y_max && oldSpd.y > 0)
+                {
+                    double delta = oldPos.y - y_max - 0.01;
+                    cout << "HIT Y: " << delta << ' ' << (pos.y + 0.25 * 0.999 * oldSpd.y - y_max) << ' ' << oldSpd.y << endl;
+                    oldSpd.y *= -0.25;  if(oldSpd.y > -delta)oldPos.y -= 0.8 * delta;
+                }
+
+                oldSpd -= 0.001 * oldSpd;  oldPos += oldSpd;
+                Vec2D errPos = pos - oldPos, errSpd = spd - oldSpd;
+                if(abs(errPos.x) > 1e-3 || abs(errPos.y) > 1e-3 || abs(errSpd.x) > 1e-5 || abs(errSpd.y) > 1e-5)
+                {
+                    cout << "Error: ";
+                    cout << (pos.x - oldPos.x) << ' ' << (pos.y - oldPos.y) << ' ';
+                    cout << (spd.x - oldSpd.x) << ' ' << (spd.y - oldSpd.y) << endl;
+                }
+            }
+            oldPos = pos;  oldSpd = spd;  fly = true;
+        }
+        else fly = false;
+    }
 }
 
 MyStrategy::MyStrategy()
