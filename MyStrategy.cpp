@@ -139,7 +139,7 @@ inline constexpr Vec2D conj(const Vec2D &v)
 
 
 double rinkLeft, rinkRight, rinkTop, rinkBottom;
-double goalCenter, goalHalf, hockeyistRad, puckRad, goalieSpd;
+double goalCenter, goalHalf, hockeyistRad, puckRad, goalieSpd, goalieRange;
 constexpr double hockeyistFrict = 0.02, puckFrict = 0.001;
 constexpr double wallCoeff = 0.25, goalieCoeff = 0.325, goalieFrict = 0.1;
 constexpr double minDepth = 0.01, depthFactor = 0.8;
@@ -150,7 +150,7 @@ void initConsts(const Game& game, const World& world)
     rinkTop = game.getRinkTop();  rinkBottom = game.getRinkBottom();
     goalHalf = game.getGoalNetHeight() / 2;  goalCenter = game.getGoalNetTop() + goalHalf;
     hockeyistRad = world.getHockeyists()[0].getRadius();  puckRad = world.getPuck().getRadius();
-    goalieSpd = game.getGoalieMaxSpeed();
+    goalieSpd = game.getGoalieMaxSpeed();  goalieRange = goalHalf - hockeyistRad;
 }
 
 struct HockeyistPredictor
@@ -186,13 +186,13 @@ struct PuckPredictor
         {
             Vec2D cur = Vec2D(hockeyist.getX(), hockeyist.getY());
             cur.y = max(cur.y - goalieSpd, min(cur.y + goalieSpd, pos.y));
-            cur.y = max(goalCenter - goalHalf + hockeyistRad, min(goalCenter + goalHalf - hockeyistRad, cur.y));
+            cur.y = max(goalCenter - goalieRange, min(goalCenter + goalieRange, cur.y));
             goalie[hockeyist.isTeammate() ? 0 : 1] = cur;
         }
         goalieTime = 1000000;  // TODO
     }
 
-    void bounceCircle(const Vec2D &center, double rad)
+    void bounceCircle(const Vec2D &center, double rad, double coeff, double frict)
     {
         Vec2D delta = center - pos;  if(!(delta.sqr() < rad * rad))return;
         double normSpd = max(0.0, spd * delta), normImp = (1 + goalieCoeff) * normSpd;
@@ -217,8 +217,8 @@ struct PuckPredictor
             {
                 if(delta > puckRad)return -1;
                 cout << "CIRCLES!!!" << endl;
-                bounceCircle(Vec2D(rinkLeft, goalCenter - goalHalf), puckRad);
-                bounceCircle(Vec2D(rinkLeft, goalCenter + goalHalf), puckRad);
+                bounceCircle(Vec2D(rinkLeft, goalCenter - goalHalf), puckRad, 0.025, 0.0);
+                bounceCircle(Vec2D(rinkLeft, goalCenter + goalHalf), puckRad, 0.025, 0.0);
             }
             else
             {
@@ -233,8 +233,8 @@ struct PuckPredictor
             {
                 if(delta < -puckRad)return 1;
                 cout << "CIRCLES!!!" << endl;
-                bounceCircle(Vec2D(rinkRight, goalCenter - goalHalf), puckRad);
-                bounceCircle(Vec2D(rinkRight, goalCenter + goalHalf), puckRad);
+                bounceCircle(Vec2D(rinkRight, goalCenter - goalHalf), puckRad, 0.025, 0.0);
+                bounceCircle(Vec2D(rinkRight, goalCenter + goalHalf), puckRad, 0.025, 0.0);
             }
             else
             {
@@ -255,7 +255,8 @@ struct PuckPredictor
             if(spd.y > delta)pos.y += depthFactor * delta;
             hitType += "BOTTOM ";
         }
-        if(goalieTime > 0)for(int i = 0; i < 2; i++)bounceCircle(goalie[i], hockeyistRad + puckRad);
+        if(goalieTime > 0)for(int i = 0; i < 2; i++)
+            bounceCircle(goalie[i], hockeyistRad + puckRad, goalieCoeff, goalieFrict);
         spd -= puckFrict * spd;  pos += spd;  return 0;
     }
 };
@@ -290,22 +291,71 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     }
     */
 
-    auto &hock = hockeyistPred[self.getTeammateIndex()];
     /*
+    auto &hock = hockeyistPred[self.getTeammateIndex()];
     if(world.getTick())
     {
         cout << (hock.pos.x - self.getX()) << ' ' << (hock.pos.y - self.getY()) << ' ';
         cout << (hock.spd.x - self.getSpeedX()) << ' ' << (hock.spd.y - self.getSpeedY()) << ' ';
         cout << (rem(hock.angle - self.getAngle() + pi, 2 * pi) - pi) << endl;
     }
-    */
 
-    double accel = 0;//rand() * (2.0 / RAND_MAX) - 1;
-    double turn = 0;//(rand() * (2.0 / RAND_MAX) - 1) * game.getHockeyistTurnAngleFactor();
+    double accel = rand() * (2.0 / RAND_MAX) - 1;
+    double turn = (rand() * (2.0 / RAND_MAX) - 1) * game.getHockeyistTurnAngleFactor();
     move.setSpeedUp(accel);  move.setTurn(turn);  move.setAction(NONE);
 
     accel *= accel > 0 ? game.getHockeyistSpeedUpFactor() : game.getHockeyistSpeedDownFactor();
     hock.set(self);  hock.predict(accel, turn);
+    */
+
+    constexpr double targetAngle = -pi / 4;
+    constexpr Vec2D targetPos(720, 570);
+    const auto &puck = world.getPuck();
+    if(self.getTeammateIndex())
+    {
+        move.setSpeedUp(0);  move.setTurn(0);  move.setAction(NONE);
+    }
+    else if(self.getSwingTicks())
+    {
+        move.setSpeedUp(0);  move.setTurn(0);
+        move.setAction(rand() % (game.getMaxEffectiveSwingTicks() - self.getSwingTicks()) ? SWING : STRIKE);
+        //move.setAction(self.getSwingTicks() < game.getMaxEffectiveSwingTicks() ? SWING : STRIKE);
+    }
+    else if(puck.getOwnerHockeyistId() != self.getId())
+    {
+        Vec2D delta(puck.getX() - self.getX(), puck.getY() - self.getY());
+        double angle = rem(atan2(delta.y, delta.x) - self.getAngle() + pi, 2 * pi) - pi;
+        move.setSpeedUp(abs(angle) < pi / 4 ? 1 : 0);  move.setTurn(angle);  move.setAction(TAKE_PUCK);
+    }
+    else
+    {
+        Vec2D delta = targetPos - Vec2D(self.getX(), self.getY());
+        if(delta.sqr() < 1)
+        {
+            double angle = rem(targetAngle - self.getAngle() + pi, 2 * pi) - pi;
+            if(abs(angle) > 1e-4)
+            {
+                move.setSpeedUp(0);  move.setTurn(angle);  move.setAction(NONE);
+            }
+            else
+            {
+                move.setSpeedUp(0);  move.setTurn(0);  move.setAction(SWING);
+            }
+        }
+        else
+        {
+            double angle = rem(atan2(delta.y, delta.x) - self.getAngle() + pi / 2, 2 * pi) - pi;
+            if(abs(abs(angle) - pi / 2) > 1e-4)
+            {
+                move.setSpeedUp(0);  move.setTurn(pi / 2 - abs(angle));  move.setAction(NONE);
+            }
+            else
+            {
+                double acc = min(1.0, delta.len() / 1e3);
+                move.setSpeedUp(angle > 0 ? -acc : acc);  move.setTurn(0);  move.setAction(NONE);
+            }
+        }
+    }
 
 
     if(!self.getTeammateIndex())
