@@ -275,37 +275,9 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     }
 
     /*
-    if(!self.getTeammateIndex())
-    {
-        auto list = world.getHockeyists();  Vec2D goalie[2];
-        for(auto &hockeyist : list)if(hockeyist.getType() == GOALIE)
-            goalie[hockeyist.isTeammate() ? 0 : 1] = Vec2D(hockeyist.getX(), hockeyist.getY());
-
-        auto puck = world.getPuck();
-        Vec2D puckPos(puck.getX(), puck.getY()), puckSpd(puck.getSpeedX(), puck.getSpeedY());
-
-        cout << puckPos.x << ' ' << puckPos.y << "   ";
-        cout << puckSpd.x << ' ' << puckSpd.y << "   ";
-        cout << goalie[0].x << ' ' << goalie[0].y << "   ";
-        cout << goalie[1].x << ' ' << goalie[1].y << endl;
-    }
-    */
-
-    /*
-    auto &hock = hockeyistPred[self.getTeammateIndex()];
-    if(world.getTick())
-    {
-        cout << (hock.pos.x - self.getX()) << ' ' << (hock.pos.y - self.getY()) << ' ';
-        cout << (hock.spd.x - self.getSpeedX()) << ' ' << (hock.spd.y - self.getSpeedY()) << ' ';
-        cout << (rem(hock.angle - self.getAngle() + pi, 2 * pi) - pi) << endl;
-    }
-
-    double accel = rand() * (2.0 / RAND_MAX) - 1;
-    double turn = (rand() * (2.0 / RAND_MAX) - 1) * game.getHockeyistTurnAngleFactor();
-    move.setSpeedUp(accel);  move.setTurn(turn);  move.setAction(NONE);
-
-    accel *= accel > 0 ? game.getHockeyistSpeedUpFactor() : game.getHockeyistSpeedDownFactor();
-    hock.set(self);  hock.predict(accel, turn);
+    move.setSpeedUp(rand() * (2.0 / RAND_MAX) - 1);
+    move.setTurn((rand() * (2.0 / RAND_MAX) - 1) * game.getHockeyistTurnAngleFactor());
+    move.setAction(NONE);
     */
 
     constexpr double targetAngle = -pi / 4;
@@ -357,7 +329,27 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
         }
     }
 
+    auto &pred = hockeyistPred[self.getTeammateIndex()];
+    if(world.getTick())
+    {
+        Vec2D pos(self.getX(), self.getY()), spd(self.getSpeedX(), self.getSpeedY());
 
+        Vec2D errPos = pos - pred.pos, errSpd = spd - pred.spd;
+        double errAngle = rem(pred.angle - self.getAngle() + pi, 2 * pi) - pi;
+        if(abs(errPos.x) > 1e-3 || abs(errPos.y) > 1e-3 ||
+            abs(errSpd.x) > 1e-4 || abs(errSpd.y) > 1e-4 || abs(errAngle) > 1e-5)
+        {
+            cout << "Error: " << errPos.x << ' ' << errPos.y << ' ';
+            cout << errSpd.x << ' ' << errSpd.y << ' ' << errAngle << endl;
+        }
+    }
+
+    double accel = max(-1.0, min(1.0, move.getSpeedUp()));
+    accel *= accel > 0 ? game.getHockeyistSpeedUpFactor() : game.getHockeyistSpeedDownFactor();
+    double turn = max(-game.getHockeyistTurnAngleFactor(), min(game.getHockeyistTurnAngleFactor(), move.getTurn()));
+    pred.set(self);  pred.predict(accel, turn);
+
+    /*
     if(!self.getTeammateIndex())
     {
         if(!world.getTick())initConsts(game, world);
@@ -383,6 +375,7 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
         }
         else fly = false;
     }
+    */
 }
 
 MyStrategy::MyStrategy()
