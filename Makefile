@@ -4,6 +4,9 @@ debug:
 release:
 	g++ -std=c++11 -fno-optimize-sibling-calls -fno-strict-aliasing -DONLINE_JUDGE -D_LINUX -lm -s -x c++ -O2 -Wall -Wno-unknown-pragmas -o MyStrategy `./file-list.sh`
 
+map: utils/map.cpp
+	g++ -std=c++11 -march=native -g -Ofast utils/map.cpp -lpnglite -lz -o map
+
 opt: opt/MyStrategy opt/opt
 
 opt/MyStrategy: MyStrategy.cpp

@@ -8,6 +8,9 @@ compilation.log
 MyStrategy-old
 MyStrategy
 
+map*.png
+map
+
 opt/opt
 opt/log.txt
 opt/restart.dat
