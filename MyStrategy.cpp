@@ -141,7 +141,7 @@ inline constexpr Vec2D conj(const Vec2D &v)
 double rinkLeft, rinkRight, rinkTop, rinkBottom;
 double goalCenter, goalHalf, hockeyistRad, puckRad, goalieSpd, goalieRange;
 constexpr double hockeyistFrict = 0.02, puckFrict = 0.001, beta = -log(1 - puckFrict);
-constexpr double wallCoeff = 0.25, goalieCoeff = 0.325, goalieFrict = 0.1;
+constexpr double wallBounce = 0.25, hockeyistBounce = 0.325, goalieFrict = 0.1;
 constexpr double minDepth = 0.01, depthFactor = 0.8;
 
 void initConsts(const Game& game, const World& world)
@@ -205,25 +205,70 @@ Sector estimateGoalAngle(const Vec2D &pos, double spd, bool right)
     return Sector(atan2(dir.y, dir.x), span);
 }
 
-struct HockeyistPredictor
+struct HockeyistInfo
 {
+    string hitType;  // DEBUG
     Vec2D pos, spd;
-    double angle;
+    double angle, angSpd;
 
     void set(const Hockeyist& hockeyist)
     {
         pos = Vec2D(hockeyist.getX(), hockeyist.getY());
         spd = Vec2D(hockeyist.getSpeedX(), hockeyist.getSpeedY());
-        angle = hockeyist.getAngle();
+        angle = hockeyist.getAngle();  angSpd = hockeyist.getAngularSpeed();
     }
 
     void predict(double accel, double turn)
     {
-        spd += accel * sincos(angle);  spd -= hockeyistFrict * spd;  pos += spd;  angle += turn;
+        spd += accel * sincos(angle);  spd -= hockeyistFrict * spd;
+
+        double delta;  hitType.clear();
+        if((delta = rinkLeft + hockeyistRad - pos.x) > 0)
+        {
+            if(abs(pos.y - goalCenter) < goalHalf)
+            {
+                if(delta > puckRad)return;
+                cout << "CIRCLES!!!" << endl;
+            }
+            else
+            {
+                if(spd.x < 0)spd.x *= -hockeyistBounce;
+                if(spd.x < delta)pos.x += depthFactor * (delta - minDepth);
+                hitType += "LEFT ";
+            }
+        }
+        if((delta = rinkRight - hockeyistRad - pos.x) < 0)
+        {
+            if(abs(pos.y - goalCenter) < goalHalf)
+            {
+                if(delta < -puckRad)return;
+                cout << "CIRCLES!!!" << endl;
+            }
+            else
+            {
+                if(spd.x > 0)spd.x *= -hockeyistBounce;
+                if(spd.x > delta)pos.x += depthFactor * (delta + minDepth);
+                hitType += "RIGHT ";
+            }
+        }
+        if((delta = rinkTop + hockeyistRad - pos.y) > 0)
+        {
+            if(spd.y < 0)spd.y *= -hockeyistBounce;
+            if(spd.y < delta)pos.y += depthFactor * (delta - minDepth);
+            hitType += "TOP ";
+        }
+        if((delta = rinkBottom - hockeyistRad - pos.y) < 0)
+        {
+            if(spd.y > 0)spd.y *= -hockeyistBounce;
+            if(spd.y > delta)pos.y += depthFactor * (delta + minDepth);
+            hitType += "BOTTOM ";
+        }
+
+        pos += spd;  angSpd -= 0.0270190131 * angSpd;  angle += turn + angSpd;
     }
 };
 
-struct PuckPredictor
+struct PuckInfo
 {
     string hitType;  // DEBUG
     Vec2D pos, spd, goalie[2];
@@ -247,12 +292,11 @@ struct PuckPredictor
     void bounceCircle(const Vec2D &center, double rad, double coeff, double frict)
     {
         Vec2D delta = center - pos;  if(!(delta.sqr() < rad * rad))return;
-        double normSpd = max(0.0, spd * delta), normImp = (1 + goalieCoeff) * normSpd;
-        double tanImp = goalieFrict * normImp;  tanImp = max(-tanImp, min(tanImp, spd % delta));
+        double normSpd = max(0.0, spd * delta), normImp = (1 + hockeyistBounce) * normSpd;
+        double tanImp = goalieFrict * normImp;  tanImp = max(-tanImp, min(tanImp, spd % delta));  // TODO: incorrect tanImp
 
-        double invLen2 = 1 / delta.sqr();
-        double depth = ((rad - minDepth) * sqrt(invLen2) - 1);
-        if((normImp - normSpd) * invLen2 < depth)pos -= depthFactor * depth * delta;
+        double invLen2 = 1 / delta.sqr(), invLen = sqrt(invLen2), depth = rad * invLen - 1;
+        if((normImp - normSpd) * invLen2 < depth)pos -= depthFactor * (depth - minDepth * invLen) * delta;
         spd -= (normImp * delta + tanImp * ~delta) * invLen2;
 
         hitType += "CIRCLE ";
@@ -260,22 +304,22 @@ struct PuckPredictor
 
     int predict()
     {
-        hitType.clear();
+        spd -= puckFrict * spd;
 
-        double delta;
+        double delta;  hitType.clear();
         if((delta = rinkLeft + puckRad - pos.x) > 0)
         {
             if(abs(pos.y - goalCenter) < goalHalf)
             {
                 if(delta > puckRad)return -1;
                 cout << "CIRCLES!!!" << endl;
-                bounceCircle(Vec2D(rinkLeft, goalCenter - goalHalf), puckRad, 0.025, 0.0);
-                bounceCircle(Vec2D(rinkLeft, goalCenter + goalHalf), puckRad, 0.025, 0.0);
+                //bounceCircle(Vec2D(rinkLeft, goalCenter - goalHalf), puckRad, 0.025, 0.0);
+                //bounceCircle(Vec2D(rinkLeft, goalCenter + goalHalf), puckRad, 0.025, 0.0);
             }
             else
             {
-                delta -= minDepth;  if(spd.x < 0)spd.x *= -wallCoeff;
-                if(spd.x < delta)pos.x += depthFactor * delta;
+                if(spd.x < 0)spd.x *= -wallBounce;
+                if(spd.x < delta)pos.x += depthFactor * (delta - minDepth);
                 hitType += "LEFT ";
             }
         }
@@ -285,37 +329,39 @@ struct PuckPredictor
             {
                 if(delta < -puckRad)return 1;
                 cout << "CIRCLES!!!" << endl;
-                bounceCircle(Vec2D(rinkRight, goalCenter - goalHalf), puckRad, 0.025, 0.0);
-                bounceCircle(Vec2D(rinkRight, goalCenter + goalHalf), puckRad, 0.025, 0.0);
+                //bounceCircle(Vec2D(rinkRight, goalCenter - goalHalf), puckRad, 0.025, 0.0);
+                //bounceCircle(Vec2D(rinkRight, goalCenter + goalHalf), puckRad, 0.025, 0.0);
             }
             else
             {
-                delta += minDepth;  if(spd.x > 0)spd.x *= -wallCoeff;
-                if(spd.x > delta)pos.x += depthFactor * delta;
+                if(spd.x > 0)spd.x *= -wallBounce;
+                if(spd.x > delta)pos.x += depthFactor * (delta + minDepth);
                 hitType += "RIGHT ";
             }
         }
         if((delta = rinkTop + puckRad - pos.y) > 0)
         {
-            delta -= minDepth;  if(spd.y < 0)spd.y *= -wallCoeff;
-            if(spd.y < delta)pos.y += depthFactor * delta;
+            if(spd.y < 0)spd.y *= -wallBounce;
+            if(spd.y < delta)pos.y += depthFactor * (delta - minDepth);
             hitType += "TOP ";
         }
         if((delta = rinkBottom - puckRad - pos.y) < 0)
         {
-            delta += minDepth;  if(spd.y > 0)spd.y *= -wallCoeff;
-            if(spd.y > delta)pos.y += depthFactor * delta;
+            if(spd.y > 0)spd.y *= -wallBounce;
+            if(spd.y > delta)pos.y += depthFactor * (delta + minDepth);
             hitType += "BOTTOM ";
         }
         if(goalieTime > 0)for(int i = 0; i < 2; i++)
-            bounceCircle(goalie[i], hockeyistRad + puckRad, goalieCoeff, goalieFrict);
-        spd -= puckFrict * spd;  pos += spd;  return 0;
+            bounceCircle(goalie[i], hockeyistRad + puckRad, hockeyistBounce, goalieFrict);
+
+        pos += spd;  return 0;
     }
 };
 
 
-HockeyistPredictor hockeyistPred[6];
-PuckPredictor puckPred;
+int state[6] = {0, 0, 0, 0, 0, 0};
+HockeyistInfo hockeyistInfo[6];
+PuckInfo puckInfo;
 
 void MyStrategy::move(const Hockeyist& self, const World& world, const Game& game, Move& move)
 {
@@ -332,6 +378,23 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     move.setAction(NONE);
     */
 
+    if(!world.getTick() && self.getTeammateIndex())
+    {
+        initConsts(game, world);  srand(time(0));
+    }
+    if(!(rand() % 57))state[self.getTeammateIndex()] = rand() % 6;
+    switch(state[self.getTeammateIndex()])
+    {
+    case 0:  move.setSpeedUp(+1);  move.setTurn(0);    break;
+    case 1:  move.setSpeedUp(+1);  move.setTurn(+pi);  break;
+    case 2:  move.setSpeedUp(-1);  move.setTurn(-pi);  break;
+    case 3:  move.setSpeedUp(-1);  move.setTurn(0);    break;
+    case 4:  move.setSpeedUp(-1);  move.setTurn(+pi);  break;
+    case 5:  move.setSpeedUp(+1);  move.setTurn(-pi);  break;
+    }
+    move.setAction(NONE);
+
+    /*
     static Vec2D targetPos;
     static double targetAngle;
     const auto &puck = world.getPuck();
@@ -397,26 +460,29 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
             }
         }
     }
+    */
 
-    auto &pred = hockeyistPred[self.getTeammateIndex()];
+    auto &info = hockeyistInfo[self.getTeammateIndex()];
     if(world.getTick())
     {
         Vec2D pos(self.getX(), self.getY()), spd(self.getSpeedX(), self.getSpeedY());
 
-        Vec2D errPos = pos - pred.pos, errSpd = spd - pred.spd;
-        double errAngle = rem(pred.angle - self.getAngle() + pi, 2 * pi) - pi;
+        Vec2D errPos = pos - info.pos, errSpd = spd - info.spd;
+        double errAngle = rem(info.angle - self.getAngle() + pi, 2 * pi) - pi;
         if(abs(errPos.x) > 1e-3 || abs(errPos.y) > 1e-3 ||
             abs(errSpd.x) > 1e-4 || abs(errSpd.y) > 1e-4 || abs(errAngle) > 1e-5)
         {
-            cout << "Error: " << errPos.x << ' ' << errPos.y << ' ';
-            cout << errSpd.x << ' ' << errSpd.y << ' ' << errAngle << endl;
+            cout << info.hitType << "Error: ";
+            cout << errPos.x << ' ' << errPos.y << ' ';
+            cout << errSpd.x << ' ' << errSpd.y << ' ';
+            cout << errAngle << endl;
         }
     }
 
     double accel = max(-1.0, min(1.0, move.getSpeedUp()));
     accel *= accel > 0 ? game.getHockeyistSpeedUpFactor() : game.getHockeyistSpeedDownFactor();
     double turn = max(-game.getHockeyistTurnAngleFactor(), min(game.getHockeyistTurnAngleFactor(), move.getTurn()));
-    pred.set(self);  pred.predict(accel, turn);
+    info.set(self);  info.predict(accel, turn);
 
     /*
     if(!self.getTeammateIndex())
@@ -430,17 +496,17 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
             Vec2D pos(puck.getX(), puck.getY()), spd(puck.getSpeedX(), puck.getSpeedY());
             if(fly)
             {
-                if(puckPred.predict())cout << "GOAL!!!" << endl;
-                Vec2D errPos = pos - puckPred.pos, errSpd = spd - puckPred.spd;
+                if(puckInfo.predict())cout << "GOAL!!!" << endl;
+                Vec2D errPos = pos - puckInfo.pos, errSpd = spd - puckInfo.spd;
                 if(abs(errPos.x) > 1e-3 || abs(errPos.y) > 1e-3 || abs(errSpd.x) > 1e-4 || abs(errSpd.y) > 1e-4)
                 {
-                    cout << puckPred.hitType << "Error: ";
+                    cout << puckInfo.hitType << "Error: ";
                     cout << errPos.x << ' ' << errPos.y << ' ';
                     cout << errSpd.x << ' ' << errSpd.y << endl;
                 }
             }
             const auto &hockeyists = world.getHockeyists();
-            puckPred.set(puck, hockeyists);  fly = true;
+            puckInfo.set(puck, hockeyists);  fly = true;
         }
         else fly = false;
     }
