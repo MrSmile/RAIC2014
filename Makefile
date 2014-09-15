@@ -7,6 +7,9 @@ release:
 map: utils/map.cpp
 	g++ -std=c++11 -march=native -g -Ofast utils/map.cpp -lpnglite -lz -o map
 
+sweep: utils/sweep.cpp
+	g++ -std=c++11 -march=native -g -Ofast utils/sweep.cpp -o sweep
+
 opt: opt/MyStrategy opt/opt
 
 opt/MyStrategy: MyStrategy.cpp

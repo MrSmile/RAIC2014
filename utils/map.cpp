@@ -8,14 +8,14 @@ using namespace std;
 constexpr double pi = 3.14159265358979323846264338327950288;
 
 
-inline double sqr(double x)
+inline constexpr double sqr(double x)
 {
     return x * x;
 }
 
-inline double rem(double x, double y)
+inline constexpr double rem(double x, double y)
 {
-    x /= y;  return y * (x - floor(x));
+    return y * (x / y - floor(x / y));
 }
 
 
@@ -214,7 +214,6 @@ bool createMap(const char *file, double spd)
 int main()
 {
     if(png_init(0, 0))return -1;
-    createMap("map15.png", 15);  createMap("map20.png", 20);
-    createMap("map25.png", 25);  createMap("map30.png", 30);
+    createMap("map15.png", 15);  createMap("map20.png", 20);  createMap("map25.png", 25);
     return 0;
 }
