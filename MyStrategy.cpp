@@ -181,10 +181,10 @@ struct Sector
     }
 };
 
-bool iterateGoalEstimation(double dist, double offs, double invSpd, Vec2D &dir, bool first)
+bool iterateGoalEstimation(double dist, double offs, double spd, Vec2D &dir, bool first)
 {
     const double rad = hockeyistRad + puckRad;
-    double end = (dist - rad * dir.y) * invSpd, cmp = 0;
+    double invSpd = 1 / spd, end = (dist - rad * dir.y) * invSpd, cmp = 0;
     if(first)
     {
         cmp = dist * dir.y - rad;  if(!(goalieSpd * end < cmp))return false;
@@ -198,11 +198,10 @@ bool iterateGoalEstimation(double dist, double offs, double invSpd, Vec2D &dir, 
     double len = goalieSpd * (end - beg) + offs;  if(first && !(len < cmp))return false;
     double w = dist * dist + len * len, z = sqrt(w - rad * rad);
     dir = Vec2D(dist * z - len * rad, len * z + dist * rad) / w;
-    //cout << atan2(dir.y, dir.x) << ' ';
     return true;
 }
 
-Sector estimateGoalAngle(const Vec2D &pos, double spd, bool right)
+Sector estimateGoalAngle(const Vec2D &pos, const Vec2D &spd, double power, bool right)
 {
     Vec2D dir = pos;
     if(right)dir.x = rinkLeft + rinkRight - dir.x;
@@ -213,10 +212,9 @@ Sector estimateGoalAngle(const Vec2D &pos, double spd, bool right)
     double dist = dir.x - hockeyistRad;  if(!(dist > rad))return Sector(0, 0);
     double offs = max(0.0, dir.y - 2 * goalHalf);  dir = normalize(dir);
 
-    Vec2D start = dir;  double invSpd = 1 / spd;
-    if(!iterateGoalEstimation(dist, offs, invSpd, dir, true))return Sector(0, 0);
-    for(int i = 0; i < 3; i++)iterateGoalEstimation(dist, offs, invSpd, dir, false);
-    //cout << atan2(start.y, start.x) << endl;
+    Vec2D start = dir;
+    if(!iterateGoalEstimation(dist, offs, power + spd * dir, dir, true))return Sector(0, 0);
+    for(int i = 0; i < 3; i++)iterateGoalEstimation(dist, offs, power + spd * dir, dir, false);
 
     double span = atan2(dir % start, dir * start);  dir += start;
     if(!right)dir.x = -dir.x;  if(!(pos.y < goalCenter))dir.y = -dir.y;
@@ -381,11 +379,10 @@ struct PuckInfo : public UnitInfo
 };
 
 
-double evaluateStrike(const HockeyistInfo &info, double &angle, double spd, double beta, double sector)
+double evaluateStrike(const HockeyistInfo &info, double &angle, double power, double beta, double sector)
 {
     Vec2D pos = info.pos + hockeyistFrict * info.spd + holdDist * sincos(info.angle - info.angSpd);
-    //spd += info.spd * normalize(Vec2D(rinkLeft, goalCenter) - pos);
-    Sector res = estimateGoalAngle(pos, spd, false);  // TODO: side
+    Sector res = estimateGoalAngle(pos, info.spd, power, false);
     if(!(res.halfSpan > 0))return 0;
 
     angle = rem(res.centerAngle - info.angle + pi, 2 * pi) - pi;
@@ -488,21 +485,23 @@ struct MovePlan
 
     void evaluate(const HockeyistInfo &info)
     {
+        constexpr double beta = 1 - 0.1 / maxLookahead;
+
         HockeyistInfo cur = info;  Helper helper(*this);
-        score = -numeric_limits<double>::infinity();  strikeTime = -1;
+        score = -numeric_limits<double>::infinity();  strikeTime = -1;  double scale = 1;
         int n = min(maxLookahead, (int)ceil(helper.turnTime2 + maxTurnSteps));
         for(int i = 0; i < n; i++)
         {
-            cur.nextStep(helper.accel(i), helper.turn(i));
+            cur.nextStep(helper.accel(i), helper.turn(i));  scale *= beta;
             if(cur.pos.x < rinkLeft + 100)return;
             if(info.cooldown > i)continue;
 
-            double val = evaluateStrike(cur), angle = 0;
+            double val = evaluateStrike(cur) * scale, angle = 0;
             if(val > score)
             {
                 score = val;  strikeTime = i + 1;  pass = false;
             }
-            val = evaluatePass(cur, angle);
+            val = evaluatePass(cur, angle) * scale;
             if(val > score)
             {
                 score = val;  strikeTime = i + 1;  passAngle = angle;  pass = true;
