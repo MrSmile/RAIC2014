@@ -15,6 +15,12 @@ using namespace std;
 constexpr double pi = 3.14159265358979323846264338327950288;
 
 
+inline double frand()
+{
+    return rand() * (2.0 / RAND_MAX) - 1;
+}
+
+
 inline constexpr double sqr(double x)
 {
     return x * x;
@@ -170,6 +176,9 @@ void initConsts(const Game& game, const World& world)
     passSector = game.getPassSector() / 2;
     maxSwing = game.getMaxEffectiveSwingTicks();
 }
+
+
+int globalTick;
 
 
 struct Sector
@@ -391,18 +400,6 @@ double evaluateStrike(const HockeyistInfo &info, double &angle, double power, do
     return erf(beta * (offs + res.halfSpan)) - erf(beta * (offs - res.halfSpan));
 }
 
-double evaluateStrike(const HockeyistInfo &info)
-{
-    HockeyistInfo cur = info;  double angle;
-    for(int i = 0; i < maxSwing; i++)cur.nextStep(0, 0);
-    return evaluateStrike(cur, angle, strikeBase + strikeGrowth * maxSwing, strikeBeta, 0);
-}
-
-double evaluatePass(const HockeyistInfo &info, double &angle)
-{
-    return evaluateStrike(info, angle, strikeBase, passBeta, passSector);
-}
-
 constexpr double stepValue(double val)
 {
     return val < 0 ? 0 : (val > 1 ? 1 : val);
@@ -410,15 +407,17 @@ constexpr double stepValue(double val)
 
 struct MovePlan
 {
+    static constexpr int strikeDelta = 8;
+    static constexpr double timeBeta = 0.1 / maxLookahead;
+
     enum Flags
     {
         FORW = 0, FIRST_LEFT  = 0, SECOND_LEFT  = 0,
         BACK = 1, FIRST_RIGHT = 2, SECOND_RIGHT = 4,
     };
 
-    int flags, strikeTime;
+    int flags, strikeTime, swingTime;
     double firstTurnEnd, secondTurnStart, score, passAngle;
-    bool pass;
 
     struct Helper
     {
@@ -448,31 +447,82 @@ struct MovePlan
         }
     };
 
-    MovePlan() = default;
-
-    MovePlan(int fl, double turn1, double turn2) : flags(fl), firstTurnEnd(turn1), secondTurnStart(turn2)
+    MovePlan() : flags(0), strikeTime(maxLookahead), swingTime(maxSwing),
+        firstTurnEnd(0), secondTurnStart(maxLookahead)
     {
     }
 
-    MovePlan(const HockeyistInfo &info, int fl, double turn1) :
-        flags(fl), firstTurnEnd(turn1), secondTurnStart(maxLookahead)
+    void tryStrike(const HockeyistInfo &info, int time)
     {
-        evaluate(info);  secondTurnStart = strikeTime;
+        double angle, val = evaluateStrike(info, angle,
+            strikeBase, passBeta, passSector) * exp(-timeBeta * time);
+        if(val > score)
+        {
+            strikeTime = time;  swingTime = -1;  score = val;  passAngle = angle;
+        }
+
+        HockeyistInfo cur = info;
+        for(int i = 0; i < maxSwing; i++)cur.nextStep(0, 0);
+        val = evaluateStrike(cur, angle,
+            strikeBase + strikeGrowth * maxSwing, strikeBeta, 0) * exp(-timeBeta * (time + maxSwing));
+        if(val > score)
+        {
+            strikeTime = time;  swingTime = maxSwing;  score = val;
+        }
     }
 
-    MovePlan(const HockeyistInfo &info, const MovePlan &old, double step1, double step2) :
-        flags(old.flags), firstTurnEnd(old.firstTurnEnd + step1), secondTurnStart(old.secondTurnStart + step2)
+    MovePlan(const HockeyistInfo &info, int fl, double turn) :
+        flags(fl), strikeTime(maxLookahead), swingTime(maxSwing),
+        firstTurnEnd(turn), secondTurnStart(maxLookahead), score(0)
     {
+        constexpr int step = 4;
+
+        HockeyistInfo cur = info;  Helper helper(*this);
+        for(int i = 0;; i++)
+        {
+            if(i >= info.cooldown && (i < strikeDelta || !((i + globalTick) % step)))tryStrike(cur, i);
+            if(i >= maxLookahead)break;
+
+            cur.nextStep(helper.accel(i), helper.turn(i));
+            if(cur.pos.x < rinkLeft + 100)break;
+        }
+        secondTurnStart = strikeTime;
+    }
+
+    void evaluate(const HockeyistInfo &info)
+    {
+        int minStrike = max(strikeTime - strikeDelta, info.cooldown);
+        int maxStrike = min(strikeTime + strikeDelta, maxLookahead);
+        strikeTime = maxLookahead;  swingTime = maxSwing;  score = 0;
+
+        HockeyistInfo cur = info;  Helper helper(*this);
+        for(int i = 0;; i++)
+        {
+            if(i >= minStrike)tryStrike(cur, i);
+            if(i >= maxStrike)break;
+
+            cur.nextStep(helper.accel(i), helper.turn(i));
+            if(cur.pos.x < rinkLeft + 100)break;
+        }
+    }
+
+    MovePlan(const HockeyistInfo &info, const MovePlan &old, double step) :
+        flags(old.flags), strikeTime(old.strikeTime), swingTime(old.swingTime),
+        firstTurnEnd(old.firstTurnEnd), secondTurnStart(old.secondTurnStart)
+    {
+        firstTurnEnd += step * frand();
         if(firstTurnEnd < 0)
         {
             flags ^= FIRST_RIGHT;  firstTurnEnd = -firstTurnEnd;
         }
         if(firstTurnEnd > 2 * maxTurnSteps)firstTurnEnd = 4 * maxTurnSteps - firstTurnEnd;
 
-        if(secondTurnStart < 0)secondTurnStart = -secondTurnStart;
-        if(secondTurnStart > old.strikeTime)
+        secondTurnStart += 4 * step * frand();
+        int minTurn2 = max(0, strikeTime - (int)ceil(maxTurnSteps));
+        if(secondTurnStart < minTurn2)secondTurnStart = 2 * minTurn2 - secondTurnStart;
+        if(secondTurnStart > strikeTime)
         {
-            flags ^= SECOND_RIGHT;  secondTurnStart = 2 * old.strikeTime - secondTurnStart;
+            flags ^= SECOND_RIGHT;  secondTurnStart = 2 * strikeTime - secondTurnStart;
         }
 
         evaluate(info);
@@ -483,41 +533,27 @@ struct MovePlan
         return score < plan.score;
     }
 
-    void evaluate(const HockeyistInfo &info)
-    {
-        constexpr double beta = 1 - 0.1 / maxLookahead;
-
-        HockeyistInfo cur = info;  Helper helper(*this);
-        score = -numeric_limits<double>::infinity();  strikeTime = -1;  double scale = 1;
-        int n = min(maxLookahead, (int)ceil(helper.turnTime2 + maxTurnSteps));
-        for(int i = 0; i < n; i++)
-        {
-            cur.nextStep(helper.accel(i), helper.turn(i));  scale *= beta;
-            if(cur.pos.x < rinkLeft + 100)return;
-            if(info.cooldown > i)continue;
-
-            double val = evaluateStrike(cur) * scale, angle = 0;
-            if(val > score)
-            {
-                score = val;  strikeTime = i + 1;  pass = false;
-            }
-            val = evaluatePass(cur, angle) * scale;
-            if(val > score)
-            {
-                score = val;  strikeTime = i + 1;  passAngle = angle;  pass = true;
-            }
-        }
-    }
-
     void execute(Move &move)
     {
+        cout << "Best score: " << score << ", strike: " << strikeTime;
+        if(swingTime < 0)cout << ", pass: " << passAngle;
+        else cout << ", swing: " << swingTime;  cout << endl;
+
+        if(!strikeTime)
+        {
+            move.setSpeedUp(0);  move.setTurn(0);
+            if(swingTime < 0)
+            {
+                move.setPassPower(1);  move.setPassAngle(passAngle);  move.setAction(PASS);
+            }
+            else move.setAction(SWING);  *this = MovePlan();  return;
+        }
+
         Helper helper(*this);  double acc = helper.accel(0);
         move.setSpeedUp(acc > 0 ? acc / accelMax : acc / accelMin);
         move.setTurn(helper.turn(0));  move.setAction(NONE);
 
-        cout << "Best score: " << score << ", strike: " << strikeTime;
-        if(pass)cout << ", pass: " << passAngle;  cout << endl;
-
+        strikeTime--;
         firstTurnEnd = max(0.0, firstTurnEnd - 1);
         secondTurnStart = max(0.0, secondTurnStart - 1);
     }
@@ -527,14 +563,12 @@ void optimizeMove(const HockeyistInfo &info, vector<MovePlan> &moves, double ste
 {
     constexpr int survive = 4, offspring = 4;
 
-    double step2 = 4 * step;  int n = 0;
+    int n = 0;
     auto rend = moves.rend();  make_heap(moves.rbegin(), rend);
     for(; n < survive && rend != moves.rbegin(); n++, --rend)
         pop_heap(moves.rbegin(), rend);  moves.resize(n);
     for(int i = 0; i < n; i++)for(int j = 0; j < offspring; j++)
-        moves.emplace_back(info, moves[i],
-            step  * (rand() * (2.0 / RAND_MAX) - 1),
-            step2 * (rand() * (2.0 / RAND_MAX) - 1));
+        moves.emplace_back(info, moves[i], step);
 }
 
 MovePlan findBestMove(const HockeyistInfo &info, const MovePlan &old)
@@ -542,22 +576,16 @@ MovePlan findBestMove(const HockeyistInfo &info, const MovePlan &old)
     constexpr int step = 4;
 
     vector<MovePlan> moves;  moves.push_back(old);
-    moves.emplace_back(info, MovePlan::FORW, 0);
-    moves.emplace_back(info, MovePlan::BACK, 0);
     int n = min(maxLookahead, (int)ceil(2 * maxTurnSteps));
-    for(int i = step; i <= n; i += step)
+    for(int i = globalTick % step; i <= n; i += step)
     {
         moves.emplace_back(info, MovePlan::FORW | MovePlan::FIRST_LEFT,  i);
         moves.emplace_back(info, MovePlan::FORW | MovePlan::FIRST_RIGHT, i);
         moves.emplace_back(info, MovePlan::BACK | MovePlan::FIRST_LEFT,  i);
         moves.emplace_back(info, MovePlan::BACK | MovePlan::FIRST_RIGHT, i);
     }
-    optimizeMove(info, moves, 4);
-    optimizeMove(info, moves, 2);
-    optimizeMove(info, moves, 1);
-    optimizeMove(info, moves, 0.5);
-    optimizeMove(info, moves, 0.25);
-    optimizeMove(info, moves, 0.125);
+    double delta = 8;
+    for(int i = 0; i < 8; i++, delta /= 3)optimizeMove(info, moves, delta);
 
     const MovePlan *res = &old;
     double best = -numeric_limits<double>::infinity();
@@ -636,6 +664,9 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     move.setSpeedUp(0);  move.setTurn(0);  move.setAction(NONE);
     */
 
+
+    globalTick = world.getTick();
+
     //static Vec2D targetPos;
     //static double targetAngle;
     const auto &puck = world.getPuck();
@@ -707,19 +738,8 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
         */
 
         HockeyistInfo info;  info.set(self);
-        static MovePlan plan(MovePlan::FORW, 0, maxLookahead);
-        plan.evaluate(info);  plan = findBestMove(info, plan);
-        double angle = 0, strike = evaluateStrike(info), pass = evaluatePass(info, angle);
-        if(plan.score < max(strike, pass))
-        {
-            move.setSpeedUp(0);  move.setTurn(0);
-            if(pass > strike)
-            {
-                move.setPassPower(1);  move.setPassAngle(angle);  move.setAction(PASS);
-            }
-            else move.setAction(SWING);  plan = MovePlan(MovePlan::FORW, 0, maxLookahead);
-        }
-        else plan.execute(move);
+        static MovePlan plan;  plan.evaluate(info);
+        plan = findBestMove(info, plan);  plan.execute(move);
     }
 
 #if 0
