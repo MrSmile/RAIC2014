@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <algorithm>
-#include <limits>
+#include <map>
 
 #include <iostream>  // DEBUG
 #include <iomanip>  // DEBUG
@@ -138,10 +138,16 @@ inline constexpr Vec2D sincos(double angle)
     return Vec2D(cos(angle), sin(angle));
 }
 
+inline constexpr Vec2D sincos_fast(float angle)
+{
+    return Vec2D(cos(angle), sin(angle));
+}
+
 inline constexpr Vec2D conj(const Vec2D &v)
 {
     return Vec2D(v.x, -v.y);
 }
+
 
 
 
@@ -174,60 +180,6 @@ void initConsts(const Game& game, const World& world)
     passBeta = 1 / (game.getPassAngleDeviation() * sqrt(2.0));
     passSector = game.getPassSector() / 2;
     maxSwing = game.getMaxEffectiveSwingTicks();
-}
-
-
-int globalTick = -1;
-bool leftPlayer;
-
-
-struct Sector
-{
-    double centerAngle, halfSpan;
-
-    Sector(double angle, double span) : centerAngle(angle), halfSpan(span / 2)
-    {
-    }
-};
-
-bool iterateGoalEstimation(double dist, double offs, double spd, Vec2D &dir, bool first)
-{
-    const double rad = hockeyistRad + puckRad;
-    double invSpd = 1 / spd, end = (dist - rad * dir.y) * invSpd, cmp = 0;
-    if(first)
-    {
-        cmp = dist * dir.y - rad;  if(!(goalieSpd * end < cmp))return false;
-    }
-    double mul = 1 / dir.x, beg = offs * invSpd / dir.y;  end *= mul;
-    if(first)
-    {
-        cmp *= mul;  if(!(goalieSpd * (end - beg) + offs < cmp))return false;
-    }
-    beg = -log(1 - beta * beg) / beta;  end = -log(1 - beta * end) / beta;
-    double len = goalieSpd * (end - beg) + offs;  if(first && !(len < cmp))return false;
-    double w = dist * dist + len * len, z = sqrt(w - rad * rad);
-    dir = Vec2D(dist * z - len * rad, len * z + dist * rad) / w;
-    return true;
-}
-
-Sector estimateGoalAngle(const Vec2D &pos, const Vec2D &spd, double power, bool right)
-{
-    Vec2D dir = pos;
-    if(right)dir.x = rinkLeft + rinkRight - dir.x;
-    if(pos.y < goalCenter)dir.y = 2 * goalCenter - dir.y;
-    dir -= Vec2D(rinkLeft, goalCenter - goalHalf);
-
-    const double rad = hockeyistRad + puckRad;
-    double dist = dir.x - hockeyistRad;  if(!(dist > rad))return Sector(0, 0);
-    double offs = max(0.0, dir.y - 2 * goalHalf);  dir = normalize(dir);
-
-    Vec2D start = dir;
-    if(!iterateGoalEstimation(dist, offs, power + spd * dir, dir, true))return Sector(0, 0);
-    for(int i = 0; i < 3; i++)iterateGoalEstimation(dist, offs, power + spd * dir, dir, false);
-
-    double span = atan2(dir % start, dir * start);  dir += start;
-    if(!right)dir.x = -dir.x;  if(!(pos.y < goalCenter))dir.y = -dir.y;
-    return Sector(atan2(dir.y, dir.x), span);
 }
 
 
@@ -267,7 +219,7 @@ struct HockeyistInfo : public UnitInfo
 
     void nextStep(double accel, double turn)
     {
-        spd += accel * sincos(angle);  spd -= hockeyistFrict * spd;
+        spd += accel * sincos_fast(angle);  spd -= hockeyistFrict * spd;
 
         double delta;
         if((delta = rinkLeft + hockeyistRad - pos.x) > 0)
@@ -324,21 +276,11 @@ struct PuckInfo : public UnitInfo
     Vec2D goalie[2];
     int goalieTime;
 
-    void set(const Puck& puck, const vector<Hockeyist> &hockeyists)
-    {
-        UnitInfo::set(puck);
-        for(auto &hockeyist : hockeyists)if(hockeyist.getType() == GOALIE)
-        {
-            Vec2D cur = Vec2D(hockeyist.getX(), hockeyist.getY());
-            cur.y = max(cur.y - goalieSpd, min(cur.y + goalieSpd, pos.y));
-            cur.y = max(goalCenter - goalieRange, min(goalCenter + goalieRange, cur.y));
-            goalie[hockeyist.isTeammate() ? 0 : 1] = cur;
-        }
-        goalieTime = 1000000;  // TODO
-    }
-
     int nextStep()
     {
+        double y = max(goalCenter - goalieRange, min(goalCenter + goalieRange, pos.y));
+        for(int i = 0; i < 2; i++)goalie[i].y = max(goalie[i].y - goalieSpd, min(goalie[i].y + goalieSpd, y));
+
         spd -= puckFrict * spd;
 
         double delta;
@@ -388,6 +330,61 @@ struct PuckInfo : public UnitInfo
 };
 
 
+int globalTick = -1;  bool leftPlayer;
+map<long long, int> hockeyistIndex;
+vector<HockeyistInfo> hockeyists;
+PuckInfo puck;
+
+
+struct Sector
+{
+    double centerAngle, halfSpan;
+
+    Sector(double angle, double span) : centerAngle(angle), halfSpan(span / 2)
+    {
+    }
+};
+
+bool iterateGoalEstimation(double dist, double offs, double spd, Vec2D &dir, bool first)
+{
+    const double rad = hockeyistRad + puckRad;
+    double invSpd = 1 / spd, end = (dist - rad * dir.y) * invSpd, cmp = 0;
+    if(first)
+    {
+        cmp = dist * dir.y - rad;  if(!(goalieSpd * end < cmp))return false;
+    }
+    double mul = 1 / dir.x, beg = offs * invSpd / dir.y;  end *= mul;
+    if(first)
+    {
+        cmp *= mul;  if(!(goalieSpd * (end - beg) + offs < cmp))return false;
+    }
+    beg = -log(1 - beta * beg) / beta;  end = -log(1 - beta * end) / beta;
+    double len = goalieSpd * (end - beg) + offs;  if(first && !(len < cmp))return false;
+    double w = dist * dist + len * len, z = sqrt(w - rad * rad);
+    dir = Vec2D(dist * z - len * rad, len * z + dist * rad) / w;
+    return true;
+}
+
+Sector estimateGoalAngle(const Vec2D &pos, const Vec2D &spd, double power, bool right)
+{
+    Vec2D dir = pos;
+    if(right)dir.x = rinkLeft + rinkRight - dir.x;
+    if(pos.y < goalCenter)dir.y = 2 * goalCenter - dir.y;
+    dir -= Vec2D(rinkLeft, goalCenter - goalHalf);
+
+    const double rad = hockeyistRad + puckRad;
+    double dist = dir.x - hockeyistRad;  if(!(dist > rad))return Sector(0, 0);
+    double offs = max(0.0, dir.y - 2 * goalHalf);  dir = normalize(dir);
+
+    Vec2D start = dir;
+    if(!iterateGoalEstimation(dist, offs, power + spd * dir, dir, true))return Sector(0, 0);
+    for(int i = 0; i < 3; i++)iterateGoalEstimation(dist, offs, power + spd * dir, dir, false);
+
+    double span = atan2(dir % start, dir * start);  dir += start;
+    if(!right)dir.x = -dir.x;  if(!(pos.y < goalCenter))dir.y = -dir.y;
+    return Sector(atan2(dir.y, dir.x), span);
+}
+
 double evaluateStrike(const HockeyistInfo &info, double &angle, double power, double beta, double sector)
 {
     Vec2D pos = info.pos + hockeyistFrict * info.spd + holdDist * sincos(info.angle - info.angSpd);
@@ -399,6 +396,7 @@ double evaluateStrike(const HockeyistInfo &info, double &angle, double power, do
     //return atan(beta * (offs + res.halfSpan)) - atan(beta * (offs - res.halfSpan));
     return erf(beta * (offs + res.halfSpan)) - erf(beta * (offs - res.halfSpan));
 }
+
 
 constexpr double stepValue(double val)
 {
@@ -597,10 +595,6 @@ MovePlan findBestMove(const HockeyistInfo &info, const MovePlan &old)
 }
 
 
-int state[6] = {0, 0, 0, 0, 0, 0};
-HockeyistInfo hockeyistInfo[6];
-PuckInfo puckInfo;
-
 void MyStrategy::move(const Hockeyist& self, const World& world, const Game& game, Move& move)
 {
     const auto &player = world.getMyPlayer();
@@ -670,6 +664,20 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
         {
             initConsts(game, world);  srand(game.getRandomSeed());
             leftPlayer = (2 * player.getNetBack() < rinkLeft + rinkRight);
+        }
+
+        puck.set(world.getPuck());  int totalGoals = 0;
+        for(auto &player : world.getPlayers())totalGoals += player.getGoalCount();
+        puck.goalieTime = (totalGoals ? 999999 : world.getTickCount());
+        for(auto &hockeyist : world.getHockeyists())
+        {
+            if(hockeyist.getType() == GOALIE)
+            {
+                puck.goalie[hockeyist.isTeammate() ? 0 : 1] = Vec2D(hockeyist.getX(), hockeyist.getY());  continue;
+            }
+
+            auto res = hockeyistIndex.insert(pair<long long, int>(hockeyist.getId(), hockeyists.size()));
+            if(res.second)hockeyists.emplace_back();  hockeyists[res.first->second].set(hockeyist);
         }
     }
 
