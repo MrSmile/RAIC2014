@@ -7,7 +7,6 @@
 
 #include <iostream>  // DEBUG
 #include <iomanip>  // DEBUG
-#include <ctime>  // DEBUG
 
 using namespace model;
 using namespace std;
@@ -178,7 +177,8 @@ void initConsts(const Game& game, const World& world)
 }
 
 
-int globalTick;
+int globalTick = -1;
+bool leftPlayer;
 
 
 struct Sector
@@ -391,7 +391,7 @@ struct PuckInfo : public UnitInfo
 double evaluateStrike(const HockeyistInfo &info, double &angle, double power, double beta, double sector)
 {
     Vec2D pos = info.pos + hockeyistFrict * info.spd + holdDist * sincos(info.angle - info.angSpd);
-    Sector res = estimateGoalAngle(pos, info.spd, power, false);
+    Sector res = estimateGoalAngle(pos, info.spd, power, leftPlayer);
     if(!(res.halfSpan > 0))return 0;
 
     angle = rem(res.centerAngle - info.angle + pi, 2 * pi) - pi;
@@ -484,7 +484,7 @@ struct MovePlan
             if(i >= maxLookahead)break;
 
             cur.nextStep(helper.accel(i), helper.turn(i));
-            if(cur.pos.x < rinkLeft + 100)break;
+            if(cur.pos.x < rinkLeft + 100 || cur.pos.x > rinkRight - 100)break;
         }
         secondTurnStart = strikeTime;
     }
@@ -502,7 +502,7 @@ struct MovePlan
             if(i >= maxStrike)break;
 
             cur.nextStep(helper.accel(i), helper.turn(i));
-            if(cur.pos.x < rinkLeft + 100)break;
+            if(cur.pos.x < rinkLeft + 100 || cur.pos.x > rinkRight - 100)break;
         }
     }
 
@@ -664,8 +664,14 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     move.setSpeedUp(0);  move.setTurn(0);  move.setAction(NONE);
     */
 
-
-    globalTick = world.getTick();
+    if(globalTick != world.getTick())
+    {
+        if(!(globalTick = world.getTick()))
+        {
+            initConsts(game, world);  srand(game.getRandomSeed());
+            leftPlayer = (2 * player.getNetBack() < rinkLeft + rinkRight);
+        }
+    }
 
     //static Vec2D targetPos;
     //static double targetAngle;
@@ -684,8 +690,8 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
     {
         if(!world.getTick())
         {
-            initConsts(game, world);  srand(time(0));
             /*
+            initConsts(game, world);  srand(time(0));
             for(;;)
             {
                 double x = rinkLeft + (rinkRight - rinkLeft) * rand() / RAND_MAX;
