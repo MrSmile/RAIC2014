@@ -205,7 +205,6 @@ inline int gridPos(const Vec2D &pos)
 {
     Vec2D offs = (pos - rinkCenter) / cellSize;
     int x = lround(offs.x), y = lround(offs.y);
-    assert(abs(x) <= gridHalfWidth && abs(y) <= gridHalfHeight);
     return gridCenter + y * gridLine + x;
 }
 
@@ -497,7 +496,8 @@ struct MovePlan
 
     MovePlan(const HockeyistInfo &info, int fl, double turn) :
         flags(fl), strikeTime(maxLookahead), swingTime(maxSwing),
-        firstTurnEnd(turn), secondTurnStart(maxLookahead), score(0)
+        firstTurnEnd(turn), secondTurnStart(maxLookahead),
+        score(-numeric_limits<double>::infinity())
     {
         constexpr int step = 4;
 
@@ -517,7 +517,8 @@ struct MovePlan
     {
         int minStrike = max(strikeTime - strikeDelta, info.cooldown);
         int maxStrike = min(strikeTime + strikeDelta, maxLookahead);
-        strikeTime = maxLookahead;  swingTime = maxSwing;  score = 0;
+        strikeTime = maxLookahead;  swingTime = maxSwing;
+        score = -numeric_limits<double>::infinity();
 
         HockeyistInfo cur = info;  Helper helper(*this);  double safety = 1;
         for(int i = 0;; i++)
@@ -708,9 +709,9 @@ double checkField(const vector<CellType> &grid, const Vec2D &pos, int step)
 
     double res = 0;
     int index = gridCenter + (y - gridBorder) * gridLine + x;
-    for(int i = -gridBorder; i <= gridBorder; i++, index += gridLine)
-        for(int j = -gridBorder; j <= gridBorder; j++)if(grid[index + j] <= step)
-            res = max(res, gridWeight(offs.x + j, offs.y + i));  return res;
+    for(int y = -gridBorder; y <= gridBorder; y++, index += gridLine)
+        for(int x = -gridBorder; x <= gridBorder; x++)if(grid[index + x] <= step)
+            res = max(res, gridWeight(offs.x + x, offs.y + y));  return res;
 }
 
 bool checkGoalie(const Vec2D &pos, double rad)
@@ -737,7 +738,46 @@ double checkSafety(const HockeyistInfo &info, int step)
         res = max(res, checkField(enemy->stick, info.pos, step));
         res = max(res, checkField(enemy->stick, puck, step));
     }
-    return 1 - res * (1 - double(step) / maxLookahead);
+    return 1 - res * (1 - sqr(step / 30.0));
+}
+
+
+uint8_t gradient(float val)
+{
+    static const uint8_t palette[26] =
+        {0, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 15};
+
+    //return palette[min(max(0, int(val * 26)), 25)];
+    return palette[1 + min(max(0, int(val * 25)), 24)];
+}
+
+inline void printSmall(uint8_t up, uint8_t dn)
+{
+    cout << "\x1B[48;5;" << unsigned(up) << ";38;5;" << unsigned(dn) << "m▄";
+}
+
+inline void printLarge(uint8_t cell)
+{
+    cout << "\x1B[48;5;" << unsigned(cell) << "m  ";
+}
+
+void drawField(const vector<CellType> &grid)
+{
+    static bool first = true;
+
+    if(first)
+    {
+        cout << "\x1B[2J";  first = false;
+    }
+
+    cout << "\x1B[0;0H";
+    for(int cell = 0; cell + gridLine <= gridSize;)
+    {
+        for(int x = 0; x < gridLine; x++, cell++)
+            printLarge(gradient(grid[cell] / double(maxLookahead)));
+        cout << "\x1B[0m\n";
+    }
+    cout.flush();
 }
 
 
@@ -839,6 +879,8 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
                     }
             }
         }
+
+        //drawField(enemyInfo[0].stick);
     }
 
     //static Vec2D targetPos;
