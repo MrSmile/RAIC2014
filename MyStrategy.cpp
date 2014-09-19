@@ -32,6 +32,11 @@ inline constexpr double rem(double x, double y)
     return y * (x / y - floor(x / y));
 }
 
+inline constexpr double relAngle(double angle)
+{
+    return rem(angle + pi, 2 * pi) - pi;
+}
+
 
 struct Vec2D
 {
@@ -163,16 +168,17 @@ constexpr int gridBorder = 2;
 int globalTick = -1;
 bool leftPlayer;
 
-constexpr double hockeyistFrict = 0.02, puckFrict = 0.001, beta = -log(1 - puckFrict);
+constexpr double hockeyistFrict = 0.02, puckFrict = 0.001, puckBeta = -log(1 - puckFrict);
 constexpr double wallBounce = 0.25, hockeyistBounce = 0.325, goalieFrict = 0.1;
 constexpr double minDepth = 0.01, depthFactor = 0.8;
 
 double rinkLeft, rinkRight, rinkTop, rinkBottom;  Vec2D rinkCenter;
-int gridHalfWidth, gridHalfHeight, gridLine, gridSize, gridCenter;
+int gridHalfWidth, gridHalfHeight, gridLine, gridHeight, gridCenter, gridSize;
 double goalCenter, goalHalf, hockeyistRad, puckRad, goalieSpd, goalieRange;
 double accelMin, accelMax, turnAngle, maxTurnSteps;
 double stickLength, holdDist, timeGammaSwing;  int maxSwing;
-double strikeBase, strikeGrowth, strikeBeta, passBeta, passSector;
+double strikeBase, strikeGrowth, passBase, strikeBeta, passBeta, passSector;
+double minChance, maxChance, pickChance, strikeChance, chanceDrop;
 
 
 void initConsts(const Game& game, const World& world)
@@ -184,8 +190,9 @@ void initConsts(const Game& game, const World& world)
 
     gridHalfWidth  = lround((rinkRight - rinkLeft) / (2 * cellSize)) + gridBorder + 1;
     gridHalfHeight = lround((rinkBottom - rinkTop) / (2 * cellSize)) + gridBorder + 1;
-    gridLine = 2 * gridHalfWidth + 1;  gridSize = (2 * gridHalfHeight + 1) * gridLine;
+    gridLine = 2 * gridHalfWidth + 1;  gridHeight = 2 * gridHalfHeight + 1;
     gridCenter = gridHalfHeight * gridLine + gridHalfWidth;
+    gridSize = gridHeight * gridLine;
 
     goalHalf = game.getGoalNetHeight() / 2;  goalCenter = game.getGoalNetTop() + goalHalf;
     hockeyistRad = world.getHockeyists()[0].getRadius();  puckRad = world.getPuck().getRadius();
@@ -197,11 +204,18 @@ void initConsts(const Game& game, const World& world)
     holdDist = game.getPuckBindingRange();
     maxSwing = game.getMaxEffectiveSwingTicks();
     timeGammaSwing = pow(timeGamma, maxSwing);
-    strikeBase = 20 * game.getStrikePowerBaseFactor();
-    strikeGrowth = 20 * game.getStrikePowerGrowthFactor();
+    strikeBase   = game.getStruckPuckInitialSpeedFactor() * game.getStrikePowerBaseFactor();
+    strikeGrowth = game.getStruckPuckInitialSpeedFactor() * game.getStrikePowerGrowthFactor();
+    passBase     = game.getStruckPuckInitialSpeedFactor() * game.getPassPowerFactor();
     strikeBeta = 1 / (game.getStrikeAngleDeviation() * sqrt(2.0));
-    passBeta = 1 / (game.getPassAngleDeviation() * sqrt(2.0));
+    passBeta   = 1 / (game.getPassAngleDeviation()   * sqrt(2.0));
     passSector = game.getPassSector() / 2;
+
+    minChance = game.getMinActionChance();
+    maxChance = game.getMaxActionChance();
+    pickChance   = 1 + game.getPickUpPuckBaseChance();
+    strikeChance = 1 + game.getStrikePuckBaseChance();
+    chanceDrop = 1 / game.getStruckPuckInitialSpeedFactor();
 }
 
 inline int gridPos(const Vec2D &pos)
@@ -308,6 +322,15 @@ struct PuckInfo : public UnitInfo
 {
     Vec2D goalie[2];
     int goalieTime;
+
+    PuckInfo() = default;
+
+    PuckInfo(const Vec2D &pos_, const Vec2D &spd_)
+    {
+        pos = pos_;  spd = spd_;
+        goalie[0] = Vec2D(rinkLeft  + hockeyistRad, pos_.y);
+        goalie[1] = Vec2D(rinkRight - hockeyistRad, pos_.y);
+    }
 
     int nextStep()
     {
@@ -431,7 +454,7 @@ template<typename T, typename Info = HockeyistInfo> struct Mapper
 
 struct ReachabilityMap : public Mapper<ReachabilityMap>
 {
-    vector<CellType> body, stick;
+    vector<CellType> body, stick, filteredStick;
 
     void reset()
     {
@@ -449,6 +472,39 @@ struct ReachabilityMap : public Mapper<ReachabilityMap>
 
     void closePath(HockeyistInfo &info, int flags, double turnTime)
     {
+    }
+
+    void filter()
+    {
+        int x, y, cell = 0;
+        filteredStick.resize(gridSize);
+        for(y = 0; y < gridBorder; y++)
+            for(x = 0; x < gridLine; x++, cell++)
+                filteredStick[cell] = maxLookahead;
+        for(; y < gridHeight - gridBorder; y++)
+        {
+            for(x = 0; x < gridBorder; x++, cell++)
+                filteredStick[cell] = maxLookahead;
+            for(; x < gridLine - gridBorder; x++, cell++)
+            {
+                CellType val = stick[cell];
+                val = min<int>(val, stick[cell - gridLine - 1]);
+                val = min<int>(val, stick[cell - gridLine + 1]);
+                val = min<int>(val, stick[cell + gridLine - 1]);
+                val = min<int>(val, stick[cell + gridLine + 1]);
+                val = min<int>(val, stick[cell - gridLine]);
+                val = min<int>(val, stick[cell + gridLine]);
+                val = min<int>(val, stick[cell - 1]);
+                val = min<int>(val, stick[cell + 1]);
+                filteredStick[cell] = val;
+            }
+            for(; x < gridLine; x++, cell++)
+                filteredStick[cell] = maxLookahead;
+        }
+        for(; y < gridHeight; y++)
+            for(x = 0; x < gridLine; x++, cell++)
+                filteredStick[cell] = maxLookahead;
+        assert(cell == gridSize);
     }
 };
 
@@ -597,7 +653,8 @@ bool iterateGoalEstimation(double dist, double offs, double spd, Vec2D &dir, boo
     {
         cmp *= mul;  if(!(goalieSpd * (end - beg) + offs < cmp))return false;
     }
-    beg = -log(1 - beta * beg) / beta;  end = -log(1 - beta * end) / beta;
+    beg = -log(1 - puckBeta * beg) / puckBeta;
+    end = -log(1 - puckBeta * end) / puckBeta;
     double len = goalieSpd * (end - beg) + offs;  if(first && !(len < cmp))return false;
     double w = dist * dist + len * len, z = sqrt(w - rad * rad);
     dir = Vec2D(dist * z - len * rad, len * z + dist * rad) / w;
@@ -624,45 +681,93 @@ Sector estimateGoalAngle(const Vec2D &pos, const Vec2D &spd, double power, bool 
     return Sector(atan2(dir.y, dir.x), span);
 }
 
-double evaluateStrike(const HockeyistInfo &info, double &angle, double power, double beta, double sector)
+double checkInterception(const Vec2D &pos, const Vec2D &spd, int time, int duration)
 {
-    Vec2D pos = info.pos + hockeyistFrict * info.spd + holdDist * sincos(info.angle - info.angSpd);
-    Sector res = estimateGoalAngle(pos, info.spd, power, leftPlayer);
+    PuckInfo info(pos, spd);  double res = 0;
+    for(int i = 1; i <= duration; i++)
+    {
+        if(info.nextStep())break;  // TODO: check self goal
+        double chance = min(maxChance, strikeChance - chanceDrop * info.spd.len());
+        res = max(res, checkField(enemyMap.stick, info.pos, time + i) * chance);
+    }
+    return res;
+}
+
+inline Vec2D puckPos(const HockeyistInfo &info)
+{
+    return info.pos + hockeyistFrict * info.spd + holdDist * sincos(info.angle - info.angSpd);
+}
+
+double evaluateStrike(const Vec2D &pos, const Vec2D &spd, double angle,
+    double power, double beta, double sector, double &targetAngle)
+{
+    Sector res = estimateGoalAngle(pos, spd, power, leftPlayer);
     if(!(res.halfSpan > 0))return 0;
 
-    angle = rem(res.centerAngle - info.angle + pi, 2 * pi) - pi;
-    double offs = max(0.0, angle - sector) + min(0.0, angle + sector);
+    targetAngle = relAngle(res.centerAngle - angle);
+    double offs = max(0.0, abs(targetAngle) - sector);
     //return atan(beta * (offs + res.halfSpan)) - atan(beta * (offs - res.halfSpan));
     return erf(beta * (offs + res.halfSpan)) - erf(beta * (offs - res.halfSpan));
+}
+
+double evaluatePass(const Vec2D &pos, const Vec2D &spd, double angle,
+    double x, double y, int time, double &targetAngle, double &power)
+{
+    double passEndSpd = (pickChance - maxChance) / chanceDrop;  // TODO: to initConsts
+
+    Vec2D delta = Vec2D(x, y) - pos;  double len = delta.len();  delta /= len;
+    double relSpd = spd * delta, puckSpd = min(passBase + relSpd, passEndSpd + puckBeta * len);
+    double duration = 1 - puckBeta * len / puckSpd;  if(!(time > 0))return 0;
+    duration = -log(time) / puckBeta;  power = (puckSpd - relSpd) / passBase;
+
+    targetAngle = relAngle(atan2(delta.y, delta.x) - angle);
+    double res = 1 - checkInterception(pos, puckSpd * delta, time, lround(duration));
+    //return res / max(1.0, delta * dir / cos(passSector));  // TODO: to initConsts
+    return res * pow(passSector / max(passSector, abs(targetAngle)), 4);
 }
 
 
 struct StrikeInfo
 {
     int strikeTime, swingTime;
-    double score, passAngle;
+    double score, passAngle, passPower;
 
     void reset()
     {
         strikeTime = maxLookahead;  swingTime = maxSwing;
-        score = -numeric_limits<double>::infinity();  passAngle = 0;
+        score = -numeric_limits<double>::infinity();
+        passAngle = 0;  passPower = 1;
     }
 
     void tryStrike(const PuckOwnerInfo &info, int time)
     {
-        double angle, val = info.safety * info.timeFactor;
-        val *= evaluateStrike(info, angle, strikeBase, passBeta, passSector);
+        double angle, val = info.safety * info.timeFactor;  Vec2D pos = puckPos(info);
+        val *= evaluateStrike(pos, info.spd, info.angle, passBase, passBeta, passSector, angle);
         if(val > score)
         {
-            strikeTime = time;  swingTime = -1;  score = val;  passAngle = angle;
+            strikeTime = time;  swingTime = -1;  score = val;
+            passAngle = angle;  passPower = 1;
+        }
+
+        for(auto &target : targets)
+        {
+            double power, val = info.safety * info.timeFactor;
+            val *= evaluatePass(pos, info.spd, info.angle, target.x, target.y, time, angle, power);
+            val *= target.deltaTime / maxLookahead;
+            if(val > score)
+            {
+                strikeTime = time;  swingTime = -1;  score = val;
+                passAngle = angle;  passPower = power;
+            }
         }
 
         val = info.safety * info.timeFactor * timeGammaSwing;
         HockeyistInfo cur = info;  for(int i = 0; i < maxSwing; i++)cur.nextStep(0, 0);
-        val *= evaluateStrike(cur, angle, strikeBase + strikeGrowth * maxSwing, strikeBeta, 0);
+        val *= evaluateStrike(puckPos(cur), cur.spd, cur.angle,
+            strikeBase + strikeGrowth * maxSwing, strikeBeta, 0, angle);
         if(val > score)
         {
-            strikeTime = time;  swingTime = maxSwing;  score = val;  passAngle = angle;
+            strikeTime = time;  swingTime = maxSwing;  score = val;
         }
     }
 
@@ -765,7 +870,7 @@ struct MovePlan : public StrikeInfo
     void execute(Move &move)
     {
         cout << "Best score: " << score << ", strike: " << strikeTime;
-        if(swingTime < 0)cout << ", pass: " << passAngle;
+        if(swingTime < 0)cout << ", pass: " << passAngle << ", power: " << passPower;
         else cout << ", swing: " << swingTime;  cout << endl;
 
         if(!strikeTime)
@@ -773,7 +878,7 @@ struct MovePlan : public StrikeInfo
             move.setSpeedUp(0);  move.setTurn(0);
             if(swingTime < 0)
             {
-                move.setPassPower(1);  move.setPassAngle(passAngle);  move.setAction(PASS);
+                move.setPassPower(passPower);  move.setPassAngle(passAngle);  move.setAction(PASS);
             }
             else move.setAction(SWING);  *this = MovePlan();  return;
         }
@@ -811,7 +916,7 @@ struct Optimizer : public Mapper<Optimizer, OptimizerState>
     {
         constexpr int step = 4;
 
-        allyMap.addMapPoint(info, time);
+        //allyMap.addMapPoint(info, time);
         info.safety = min(info.safety, checkSafety(info, time));
         if(!(time % step))info.tryStrike(info, time);  // TODO: globalTick ?
     }
@@ -961,6 +1066,7 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
 
         enemyMap.reset();
         for(auto enemy : enemies)enemyMap.fillMap(*enemy);
+        enemyMap.filter();
 
         allyMap.reset();
         for(auto ally : allies)allyMap.fillMap(*ally);
@@ -969,17 +1075,7 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
         constexpr int threshold = 30;
         for(int i = 0; i < gridSize; i++)
         {
-            int val = enemyMap.stick[i];  if(val < allyMap.stick[i] + threshold)continue;
-            val = min<int>(val, enemyMap.stick[i - gridLine - 1]);
-            val = min<int>(val, enemyMap.stick[i - gridLine + 1]);
-            val = min<int>(val, enemyMap.stick[i + gridLine - 1]);
-            val = min<int>(val, enemyMap.stick[i + gridLine + 1]);
-            val = min<int>(val, enemyMap.stick[i - gridLine]);
-            val = min<int>(val, enemyMap.stick[i + gridLine]);
-            val = min<int>(val, enemyMap.stick[i - 1]);
-            val = min<int>(val, enemyMap.stick[i + 1]);
-            val -= allyMap.stick[i];
-
+            int val = enemyMap.filteredStick[i] - allyMap.stick[i];
             if(val >= threshold)targets.emplace_back(i, val);
         }
         chooseBest(targets, 8);
