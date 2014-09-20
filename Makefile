@@ -1,8 +1,8 @@
 debug:
-	g++ -std=c++11 -fno-optimize-sibling-calls -fno-strict-aliasing -DONLINE_JUDGE -D_LINUX -DDEBUG -lm -g -O0 -Wall -Wno-unknown-pragmas -o MyStrategy `./file-list.sh`
+	g++ -std=c++11 -fno-strict-aliasing -DONLINE_JUDGE -D_LINUX -DDEBUG -lm -g -O0 -Wall -Wno-unknown-pragmas -o MyStrategy `./file-list.sh`
 
 release:
-	g++ -std=c++11 -fno-optimize-sibling-calls -fno-strict-aliasing -DONLINE_JUDGE -D_LINUX -lm -s -x c++ -O2 -Wall -Wno-unknown-pragmas -o MyStrategy `./file-list.sh`
+	g++ -std=c++11 -fno-optimize-sibling-calls -fno-strict-aliasing -fno-omit-frame-pointer -DONLINE_JUDGE -D_LINUX -g -O2 -Wall -Wno-unknown-pragmas -o MyStrategy `./file-list.sh`
 
 map: utils/map.cpp
 	g++ -std=c++11 -march=native -g -Ofast utils/map.cpp -lpnglite -lz -o map
