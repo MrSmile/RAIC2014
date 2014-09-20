@@ -714,6 +714,14 @@ inline Vec2D puckPos(const HockeyistInfo &info)
     return info.pos + hockeyistFrict * info.spd + holdDist * sincos(info.angle - info.angSpd);
 }
 
+inline bool inStrikeSector(const HockeyistInfo &info, const Vec2D &puck)
+{
+    Vec2D delta = puck - info.pos;
+    if(!(delta.sqr() < sqr(stickLength)))return false;
+    double dot = delta * info.dir, cross = delta % info.dir;
+    return abs(cross) < dot * stickSectorTan;
+}
+
 struct StrikeInfo
 {
     static constexpr double goalMultiplier = 2;
@@ -729,30 +737,33 @@ struct StrikeInfo
 
     void tryStrikeFlyby(const AllyState &info, int time)
     {
-        Vec2D delta = puckPath[time].pos - info.pos;
-        if(delta.sqr() > sqr(stickLength))return;
-        double dot = delta * info.dir, cross = delta % info.dir;
-        if(abs(cross) > dot * stickSectorTan)return;
+        if(!inStrikeSector(info, puckPath[time].pos))return;
 
-        double val = info.safety * info.timeFactor;
-        val *= min(maxChance, strikeChance - chanceDrop * puckPath[time].spd.len());
-        if(!goalFlag)
+        double drop = chanceDrop * puckPath[time].spd.len();
+        double val = info.safety * info.timeFactor;  int swing = -1;
+        if(goalFlag)  // TODO: check strike dir
         {
+            val *= min(maxChance, strikeChance - drop) * goalMultiplier;
+            if(pickChance - drop < maxChance)swing = 0;
+        }
+        else
+        {
+            val *= min(maxChance, pickChance - drop);
             int deltaTime = time - enemyMap.filteredStick[gridPos(puckPath[time].pos)];
             val *= (1 - puckPath[time].intercept) * (1 + deltaTime / maxLookahead);
         }
-        else val *= goalMultiplier;  if(!(val > score))return;
+        if(!(val > score))return;
 
-        strikeTime = time;  swingTime = maxSwing;  targetIndex = -1;  score = val;
+        strikeTime = time;  swingTime = swing;  targetIndex = -1;  score = val;
     }
 
-    void evaluateStrike(const Vec2D &pos, const Vec2D &spd, double angle,
+    void evaluateStrike(const HockeyistInfo &info, const Vec2D &puck,
         double power, double beta, double sector, int time, double val)
     {
-        Sector res = estimateGoalAngle(pos, spd, power, leftPlayer);
+        Sector res = estimateGoalAngle(puck, info.spd, power, leftPlayer);
         if(!(res.halfSpan > 0))return;
 
-        angle = relAngle(res.centerAngle - angle);  double offs = max(0.0, abs(angle) - sector);
+        double angle = relAngle(res.centerAngle - info.angle), offs = max(0.0, abs(angle) - sector);
         val *= erf(beta * (offs + res.halfSpan)) - erf(beta * (offs - res.halfSpan));
         if(!((val *= 0.5 * goalMultiplier) > score))return;
 
@@ -760,17 +771,17 @@ struct StrikeInfo
         score = val;  passAngle = angle;  passPower = 1;
     }
 
-    void evaluatePass(const Vec2D &pos, const Vec2D &spd, double angle,
+    void evaluatePass(const HockeyistInfo &info, const Vec2D &puck,
         double x, double y, int time, int catchTime, double val, int target)
     {
-        Vec2D delta = Vec2D(x, y) - pos;
+        Vec2D delta = Vec2D(x, y) - puck;
         double len2 = delta.sqr();  if(len2 < sqr(256))return;
-        angle = relAngle(atan2(delta.y, delta.x) - angle);
+        double angle = relAngle(atan2(delta.y, delta.x) - info.angle);
         if(!(abs(angle) < passSector))return;
 
         double len = sqrt(len2);  delta /= len;
         double passEndSpd = (pickChance - maxChance) / chanceDrop;  // TODO: to initConsts
-        double relSpd = spd * delta, puckSpd = min(passBase + relSpd, passEndSpd + puckBeta * len);
+        double relSpd = info.spd * delta, puckSpd = min(passBase + relSpd, passEndSpd + puckBeta * len);
         puckSpd = min(puckSpd, puckBeta * len / (1 - exp(-puckBeta * (catchTime - time))));
         double duration = 1 - puckBeta * len / puckSpd;  if(!(duration > 0))return;
         duration = -log(duration) / puckBeta;
@@ -792,19 +803,17 @@ struct StrikeInfo
             if(time < puckPathLen)tryStrikeFlyby(info, time);  return;
         }
 
-        double mul = info.safety * info.timeFactor;  Vec2D pos = puckPos(info);
-        evaluateStrike(pos, info.spd, info.angle, passBase, passBeta, passSector, time, mul);
+        double mul = info.safety * info.timeFactor;  Vec2D puck = puckPos(info);
+        evaluateStrike(info, puck, passBase, passBeta, passSector, time, mul);
 
         HockeyistInfo cur = info;  for(int i = 0; i < maxSwing; i++)cur.nextStep(0, 0);
-        double strikePower = strikeBase + strikeGrowth * maxSwing;
-        evaluateStrike(puckPos(cur), cur.spd, cur.angle,
-            strikePower, strikeBeta, 0, time, mul * timeGammaSwing);
+        evaluateStrike(cur, puckPos(cur), strikeBase + strikeGrowth * maxSwing,
+            strikeBeta, 0, time, mul * timeGammaSwing);
 
         for(size_t i = 0; i < targets.size(); i++)
         {
             double val = mul * targets[i].score;
-            evaluatePass(pos, info.spd, info.angle,
-                targets[i].x, targets[i].y, time, targets[i].time, val, i);
+            evaluatePass(info, puck, targets[i].x, targets[i].y, time, targets[i].time, val, i);
         }
     }
 
@@ -928,7 +937,7 @@ struct MovePlan : public StrikeInfo
             move.setSpeedUp(0);  move.setTurn(0);
             if(puckPathLen)
             {
-                move.setAction(TAKE_PUCK);  *this = MovePlan();
+                move.setAction(swingTime < 0 ? TAKE_PUCK : STRIKE);  *this = MovePlan();
             }
             else if(swingTime < 0)
             {
