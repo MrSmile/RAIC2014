@@ -574,6 +574,7 @@ ReachabilityMap enemyMap;
 PuckState puckPath[maxLookahead + 1];
 vector<PassTarget> targets;
 int puckPathLen, goalFlag;
+HockeyistInfo *enemyPuck;
 
 
 inline double gridWeight(double x, double y)
@@ -739,7 +740,7 @@ struct StrikeInfo
 
     void reset()
     {
-        strikeTime = maxLookahead;  swingTime = maxSwing;  targetIndex = -1;
+        strikeTime = maxLookahead;  swingTime = -1;  targetIndex = -1;
         score = -numeric_limits<double>::infinity();  passAngle = 0;  passPower = 1;
     }
 
@@ -932,6 +933,7 @@ struct MovePlan : public StrikeInfo
 
     void execute(Move &move)
     {
+        /*
         cout << "Best score: " << score << ", flags: " << flags;
         cout << ", times: " << firstTurnEnd << ':' << secondTurnStart << ':' << strikeTime;
         if(swingTime >= 0)cout << ", swing: " << swingTime;
@@ -939,6 +941,7 @@ struct MovePlan : public StrikeInfo
         else cout << ", pass: " << passAngle << ", power: " << passPower;
         if(targetIndex >= 0)cout << ", target: " << targetIndex;
         cout << endl;
+        */
 
         if(!strikeTime)
         {
@@ -1031,6 +1034,8 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
     MovePlan plan;
     vector<pair<double, int>> stick;
     PassTarget defend, attack;
+    Vec2D defendPoint, defendDir;
+    double defendHalf;
     int swinging;
 
     AllyInfo(const Hockeyist& hockeyist) : id(hockeyist.getId())
@@ -1055,7 +1060,18 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
 
         PassTarget target(puck, time);  target.id = id;
         target.flags = flags;  target.turnTime = turnTime;  target.score = score;
-        if(cell == defendCell && target.score > defend.score)defend = target;
+        if(enemyPuck)
+        {
+            Vec2D delta = puck - defendPoint;
+            double dot = delta * defendDir, cross = delta % defendDir;
+            double dist2 = sqr(cross) + sqr(max(0.0, abs(dot) - defendHalf));
+            double score = target.score * max(0.0, 1 - dist2 / sqr(hockeyistRad));
+            if(score > defend.score)
+            {
+                defend = target;  defend.score = score;
+            }
+        }
+        else if(cell == defendCell && target.score > defend.score)defend = target;
 
         int delta = enemyMap.filteredStick[cell] - max(time, info.cooldown);
         target.score *= (1 + double(delta) / maxLookahead);
@@ -1073,14 +1089,48 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
     {
     }
 
+    bool tryKnockdown(MovePlan &plan)
+    {
+        HockeyistInfo info = *this, enemy = *enemyPuck;
+        for(int i = 0; i < maxSwing; i++)
+        {
+            info.nextStep(0, 0);  enemy.nextStep(0, 0);
+        }
+        Vec2D delta = info.pos + 0.5 * stickLength * info.dir - enemy.pos;
+        if(delta.sqr() < sqr(0.3 * stickLength))
+        {
+            plan.strikeTime = 0;  plan.swingTime = maxSwing;
+            plan.targetIndex = -1;  plan.score = 0;  return true;
+        }
+        if(inStrikeSector(*this, puckPath[0].pos))
+        {
+            plan.strikeTime = 0;  plan.swingTime = 0;
+            plan.targetIndex = -1;  plan.score = 0;  return true;
+        }
+        return false;
+    }
+
     void fillMap()
     {
+        if(swinging || knockdown)return;
+
         stick.resize(gridSize);
         defend.flags = attack.flags = 0;
         defend.turnTime = attack.turnTime = 0;
         defend.score = -numeric_limits<double>::infinity();
         attack.score = -numeric_limits<double>::infinity();
         for(auto &flag : stick)flag = {0, -1};
+        if(enemyPuck)
+        {
+            if(!cooldown && tryKnockdown(plan))return;
+
+            double offs = rinkWidth / 2 - 2 * goalHalf;
+            Vec2D beg = rinkCenter + Vec2D(leftPlayer ? -offs : offs, 0);
+            Vec2D end = enemyPuck->pos + enemyPuck->spd * (0.3 / hockeyistFrict);
+            defendPoint = (beg + end) / 2;  defendDir = end - beg;
+            defendHalf = defendDir.len();  defendDir /= defendHalf;
+            defendHalf /= 2;
+        }
         Mapper::fillMap(*this);
     }
 
@@ -1088,7 +1138,8 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
     {
         constexpr double oldBonus = 0.01;
 
-        if(swinging)return plan;  plan.evaluate(*this);  plan.score += oldBonus;
+        if(swinging || knockdown)return plan;
+        plan.evaluate(*this);  plan.score += oldBonus;
         plan = Optimizer().findBestMove(*this, plan);  return plan;
     }
 
@@ -1215,8 +1266,12 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
             else synchronize(enemyInfo, enemies, hockeyist);
         }
 
-        enemyMap.reset();
-        for(auto enemy : enemies)enemyMap.fillMap(*enemy);
+        enemyMap.reset();  enemyPuck = nullptr;
+        for(auto enemy : enemies)
+        {
+            if(enemy->id == owner)enemyPuck = &*enemy;
+            enemyMap.fillMap(*enemy);
+        }
         enemyMap.filter();
 
         targets.clear();  AllyInfo *allyPuck = nullptr;
@@ -1225,11 +1280,11 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
             else ally->fillMap();
         chooseBest(targets, 8);
 
-        puckPathLen = 0;
+        static_cast<UnitInfo &>(puckPath[0]) = puck;
+        puckPath[0].intercept = 0;  puckPathLen = 0;  goalFlag = 0;
         if(owner < 0)
         {
-            static_cast<UnitInfo &>(puckPath[0]) = puck;
-            double intercept = puckPath[0].intercept = 0;  goalFlag = 0;
+            double intercept = 0;
             for(puckPathLen = 1; puckPathLen <= maxLookahead; puckPathLen++)
             {
                 if((goalFlag = puck.nextStep()))break;
@@ -1253,7 +1308,7 @@ void MyStrategy::move(const Hockeyist& self, const World& world, const Game& gam
         for(auto ally : allies)
         {
             if(ally->id == pass)ally->plan.set(targets[tg]);
-            else if(ally->id != owner)ally->plan.set(ally->defend.score > 0 ? ally->defend : ally->attack);
+            else if(ally->id != owner && ally->defend.score > 0)ally->plan.set(ally->defend);
         }
 
         /*
