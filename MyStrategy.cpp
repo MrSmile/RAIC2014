@@ -288,14 +288,24 @@ struct HockeyistInfo : public UnitInfo
         double delta;
         if((delta = rinkLeft + hockeyistRad - pos.x) > 0)
         {
-            if(abs(pos.y - goalCenter) < goalHalf)
+            double sign = pos.y - goalCenter, offs = abs(sign) - goalHalf;
+            if(offs < 0)
             {
-                if(delta > hockeyistRad)return;
+                if(delta > +1)pos.x = rinkLeft - hockeyistRad - 1;
             }
-            else
+            else if(!bounceCircle(Vec2D(rinkLeft, goalCenter + copysign(goalHalf, sign)), hockeyistRad, hockeyistBounce) &&
+                !bounceCircle(Vec2D(rinkLeft, goalCenter + copysign(goalHalf + 25, sign)), hockeyistRad, hockeyistBounce / 10))
             {
-                if(spd.x < 0)spd.x *= -hockeyistBounce;
-                if(spd.x < delta)pos.x += depthFactor * (delta - minDepth);
+                if(offs > 25)
+                {
+                    if(spd.x < 0)spd.x *= -hockeyistBounce;
+                    if(spd.x < delta)pos.x += depthFactor * (delta + minDepth);
+                }
+                else
+                {
+                    if(spd.x < 0)spd.x *= -hockeyistBounce / 10;
+                    if(spd.x < delta)pos.x += depthFactor * (delta + minDepth);
+                }
             }
         }
         if((delta = rinkRight - hockeyistRad - pos.x) < 0)
@@ -358,9 +368,10 @@ struct PuckInfo : public UnitInfo
         spd -= puckFrict * spd;
 
         double delta;
+        constexpr double eps = 10;
         if((delta = rinkLeft + puckRad - pos.x) > 0)
         {
-            if(abs(pos.y - goalCenter) < goalHalf)
+            if(abs(pos.y - goalCenter) < goalHalf + eps)
             {
                 if(delta > puckRad)return -1;
                 //bounceCircle(Vec2D(rinkLeft, goalCenter - goalHalf), puckRad, 0.025, 0.0);
@@ -374,7 +385,7 @@ struct PuckInfo : public UnitInfo
         }
         if((delta = rinkRight - puckRad - pos.x) < 0)
         {
-            if(abs(pos.y - goalCenter) < goalHalf)
+            if(abs(pos.y - goalCenter) < goalHalf + eps)
             {
                 if(delta < -puckRad)return 1;
                 //bounceCircle(Vec2D(rinkRight, goalCenter - goalHalf), puckRad, 0.025, 0.0);
@@ -497,7 +508,7 @@ template<typename T, typename Info> struct Mapper
 
 struct ReachabilityMap : public Mapper<ReachabilityMap, HockeyistInfo>
 {
-    vector<int> body, stick, filteredStick;
+    vector<int> body, stick;
 
     void reset()
     {
@@ -517,37 +528,43 @@ struct ReachabilityMap : public Mapper<ReachabilityMap, HockeyistInfo>
     {
     }
 
-    void filter()
+    static void filterField(vector<int> &field)
     {
+        vector<int> old(gridSize);  swap(old, field);
+
         int x, y, cell = 0;
-        filteredStick.resize(gridSize);
         for(y = 0; y < gridBorder; y++)
             for(x = 0; x < gridLine; x++, cell++)
-                filteredStick[cell] = maxLookahead;
+                field[cell] = maxLookahead;
         for(; y < gridHeight - gridBorder; y++)
         {
             for(x = 0; x < gridBorder; x++, cell++)
-                filteredStick[cell] = maxLookahead;
+                field[cell] = maxLookahead;
             for(; x < gridLine - gridBorder; x++, cell++)
             {
-                int val = stick[cell];
-                val = min<int>(val, stick[cell - gridLine - 1]);
-                val = min<int>(val, stick[cell - gridLine + 1]);
-                val = min<int>(val, stick[cell + gridLine - 1]);
-                val = min<int>(val, stick[cell + gridLine + 1]);
-                val = min<int>(val, stick[cell - gridLine]);
-                val = min<int>(val, stick[cell + gridLine]);
-                val = min<int>(val, stick[cell - 1]);
-                val = min<int>(val, stick[cell + 1]);
-                filteredStick[cell] = val;
+                int val = old[cell];
+                val = min<int>(val, old[cell - gridLine - 1]);
+                val = min<int>(val, old[cell - gridLine + 1]);
+                val = min<int>(val, old[cell + gridLine - 1]);
+                val = min<int>(val, old[cell + gridLine + 1]);
+                val = min<int>(val, old[cell - gridLine]);
+                val = min<int>(val, old[cell + gridLine]);
+                val = min<int>(val, old[cell - 1]);
+                val = min<int>(val, old[cell + 1]);
+                field[cell] = val;
             }
             for(; x < gridLine; x++, cell++)
-                filteredStick[cell] = maxLookahead;
+                field[cell] = maxLookahead;
         }
         for(; y < gridHeight; y++)
             for(x = 0; x < gridLine; x++, cell++)
-                filteredStick[cell] = maxLookahead;
+                field[cell] = maxLookahead;
         assert(cell == gridSize);
+    }
+
+    void filter()
+    {
+        filterField(body);  filterField(stick);
     }
 };
 
@@ -614,7 +631,8 @@ bool validPuckPos(const Vec2D &pos)
 double checkSafety(const HockeyistInfo &info, int time)
 {
     if(checkGoalie(info.pos, hockeyistRad))return 0;
-    double res = 0.5 * checkField(enemyMap.body, info.pos, time);
+    //double res = 0.5 * checkField(enemyMap.body, info.pos, time);
+    double res = (enemyMap.body[gridPos(info.pos)] <= time ? 0.5 : 0);
     if(!puckPathLen)
     {
         Vec2D puck = info.pos + hockeyistFrict * info.spd + holdDist * sincos(info.angle - info.angSpd);
@@ -622,8 +640,8 @@ double checkSafety(const HockeyistInfo &info, int time)
 
         //res = max(res, knockdownChance * checkField(enemyMap.stick, info.pos, time));
         //res = max(res, strikeChance * checkField(enemyMap.stick, puck, time));
-        if(enemyMap.filteredStick[gridPos(info.pos)] <= time)res = max(res, knockdownChance);
-        if(enemyMap.filteredStick[gridPos(puck)] <= time)res = max(res, strikeChance );
+        if(enemyMap.stick[gridPos(info.pos)] <= time)res = max(res, knockdownChance);
+        if(enemyMap.stick[gridPos(puck)] <= time)res = max(res, strikeChance );
     }
     return 1 - res / (1 + sqr(time / 50.0));
 }
@@ -703,7 +721,9 @@ Sector estimateGoalAngle(const Vec2D &pos, const Vec2D &spd, double power, bool 
 double interceptProbability(const UnitInfo &info, int time)
 {
     double chance = min(maxChance, strikeChance - chanceDrop * info.spd.len());
-    return chance * checkField(enemyMap.stick, info.pos, time) / (1 + sqr(time / 50.0));
+    //return chance * checkField(enemyMap.stick, info.pos, time) / (1 + sqr(time / 50.0));
+    if(enemyMap.stick[gridPos(info.pos)] > time)return 0;
+    return chance / (1 + sqr(time / 50.0));
 }
 
 double checkInterception(const Vec2D &pos, const Vec2D &spd, int time, int duration)
@@ -755,7 +775,7 @@ struct StrikeInfo
         else
         {
             val *= min(maxChance, pickChance - drop);
-            int deltaTime = time - enemyMap.filteredStick[gridPos(puckPath[time].pos)];
+            int deltaTime = time - enemyMap.stick[gridPos(puckPath[time].pos)];
             val *= (1 - puckPath[time].intercept) * (1 + deltaTime / maxLookahead);
         }
         if(!(val > score))return;
@@ -1073,7 +1093,7 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
         }
         else if(cell == defendCell && target.score > defend.score)defend = target;
 
-        int delta = enemyMap.filteredStick[cell] - max(time, info.cooldown);
+        int delta = enemyMap.stick[cell] - max(time, info.cooldown);
         target.score *= (1 + double(delta) / maxLookahead);
         if((cell == attackCell[0] || cell == attackCell[1]) &&
             target.score > attack.score)attack = target;
@@ -1151,6 +1171,7 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
         }
         else plan.execute(move);
 
+        /*
         switch(move.getAction())
         {
         case TAKE_PUCK:      cout << ">>>>>>>>>>>>> TAKE_PUCK"     << endl;  break;
@@ -1161,6 +1182,7 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
         case SUBSTITUTE:     cout << ">>>>>>>>>>>>> SUBSTITUTE"    << endl;  break;
         default:  break;
         }
+        */
     }
 };
 
