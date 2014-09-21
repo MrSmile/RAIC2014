@@ -159,6 +159,10 @@ inline constexpr Vec2D conj(const Vec2D &v)
 
 
 constexpr int maxLookahead = 256;
+constexpr int turnStep = 4, strikeStep = 6, strikeDelta = 8;
+constexpr int optSurvive = 4, optOffspring = 4, optStepCount = 2, optFinalCount = 6;
+constexpr double optStepBase = 4, optStepMul = 0.5;
+
 constexpr double timeGamma = 1 - 1.0 / maxLookahead;
 constexpr double cellSize = 48;
 constexpr int gridBorder = 2;
@@ -341,8 +345,8 @@ struct HockeyistInfo : public UnitInfo
             if(spd.y > delta)pos.y += depthFactor * (delta + minDepth);
         }
 
-        pos += spd;  angSpd -= 0.0270190131 * angSpd;
-        dir = sincos_fast(angle += turn + angSpd);
+        pos += spd;  angSpd -= 0.0270190131 * angSpd;  turn += angSpd;
+        if(abs(turn) > 1e-6)dir = sincos_fast(angle += turn);
     }
 };
 
@@ -479,13 +483,11 @@ template<typename T, typename Info> struct Mapper
 
     void fillMap(const Info& info, int flags, double accel1, double accel2, double turn)
     {
-        constexpr int step = 4;
-
         Info cur = info;
         int n = min(maxLookahead, info.knockdown + int(maxTurnSteps));
         for(int i = info.knockdown + 1; i <= n; i++)
         {
-            cur.nextStep(accel1, turn, i);  addMapPoint(cur, i, flags, i);  if(i % step)continue;  // TODO: globalTick ?
+            cur.nextStep(accel1, turn, i);  addMapPoint(cur, i, flags, i);  if(i % turnStep)continue;  // TODO: globalTick ?
             fillMapTail(cur, flags, accel1, i);  fillMapTail(cur, flags, accel2, turn, i);
         }
     }
@@ -858,8 +860,6 @@ struct StrikeInfo
 
 struct MovePlan : public StrikeInfo
 {
-    static constexpr int strikeDelta = 8;
-
     int flags;
     double firstTurnEnd, secondTurnStart;
 
@@ -1010,10 +1010,8 @@ struct Optimizer : public Mapper<Optimizer, OptimizerState>
 
     void addMapPoint(OptimizerState &info, int time, int flags, double turnTime)
     {
-        constexpr int step = 4;
-
         if(time < info.cooldown)return;
-        if(time < MovePlan::strikeDelta || !(time % step))info.tryStrike(info, time);  // TODO: globalTick ?
+        if(time < strikeDelta || !(time % strikeStep))info.tryStrike(info, time);  // TODO: globalTick ?
     }
 
     void closePath(OptimizerState &info, int flags, double turnTime)
@@ -1021,10 +1019,8 @@ struct Optimizer : public Mapper<Optimizer, OptimizerState>
         moves.emplace_back(info, flags, turnTime);
     }
 
-    void optimizeMove(const HockeyistInfo &info, double step)
+    void optimizeMove(const HockeyistInfo &info, double step, int survive, int offspring)
     {
-        constexpr int survive = 4, offspring = 4;
-
         size_t n = chooseBest(moves, survive);
         for(size_t i = 0; i < n; i++)for(int j = 0; j < offspring; j++)
             moves.emplace_back(info, moves[i], step);
@@ -1034,8 +1030,11 @@ struct Optimizer : public Mapper<Optimizer, OptimizerState>
     {
         moves.clear();  moves.push_back(old);  fillMap(info);
 
-        double delta = 8;
-        for(int i = 0; i < 8; i++, delta /= 3)optimizeMove(info, delta);
+        double delta = optStepBase;
+        for(int i = 0; i < optStepCount; i++, delta *= optStepMul)
+            optimizeMove(info, delta, optSurvive, optOffspring);
+        for(int i = 0; i < optFinalCount; i++, delta *= optStepMul)
+            optimizeMove(info, delta, 1, optOffspring);
 
         const MovePlan *res = &old;
         double best = -numeric_limits<double>::infinity();
