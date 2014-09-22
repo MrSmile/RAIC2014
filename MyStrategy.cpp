@@ -439,6 +439,7 @@ namespace MoveFlag
     {
         FORW = 0, FIRST_LEFT  = 0, SECOND_LEFT  = 0,
         BACK = 1, FIRST_RIGHT = 2, SECOND_RIGHT = 4,
+        STOP = 8
     };
 }
 
@@ -753,6 +754,8 @@ double checkInterception(const Vec2D &pos, const Vec2D &spd, int time, int durat
     for(int i = 1; i <= duration; i++)
     {
         info.spd -= puckFrict * info.spd;  info.pos += info.spd;
+        if(abs(info.pos.x - rinkCenter.x) > rinkWidth  / 2 + cellSize)break;
+        if(abs(info.pos.y - rinkCenter.y) > rinkHeight / 2 + cellSize)break;
         res = max(res, interceptProbability(info, time + i));
     }
     return res;
@@ -782,7 +785,7 @@ struct StrikeInfo
     void reset()
     {
         strikeTime = maxLookahead;  swingTime = -1;  targetIndex = -1;
-        score = -numeric_limits<double>::infinity();  passAngle = 0;  passPower = 1;
+        score = 0;  passAngle = 0;  passPower = 1;
     }
 
     void tryStrikeFlyby(const AllyState &info, int time, double val)
@@ -912,13 +915,13 @@ struct MovePlan : public StrikeInfo
         }
     };
 
-    MovePlan() : flags(0), firstTurnEnd(0), secondTurnStart(maxLookahead)
+    MovePlan() : flags(MoveFlag::STOP), firstTurnEnd(0), secondTurnStart(maxLookahead)
     {
         reset();
     }
 
-    MovePlan(const StrikeInfo &info, int fl, double turnTime) : StrikeInfo(info),
-        flags(fl), firstTurnEnd(turnTime), secondTurnStart(info.strikeTime)
+    MovePlan(const StrikeInfo &info, int flags_, double turnTime) : StrikeInfo(info),
+        flags(flags_), firstTurnEnd(turnTime), secondTurnStart(info.strikeTime)
     {
     }
 
@@ -976,13 +979,21 @@ struct MovePlan : public StrikeInfo
     {
         /*
         cout << "Best score: " << score << ", flags: " << flags;
-        cout << ", times: " << firstTurnEnd << ':' << secondTurnStart << ':' << strikeTime;
-        if(swingTime >= 0)cout << ", swing: " << swingTime;
-        else if(puckPathLen)cout << ", pickup";
-        else cout << ", pass: " << passAngle << ", power: " << passPower;
-        if(targetIndex >= 0)cout << ", target: " << targetIndex;
+        if(!(flags & MoveFlag::STOP))
+        {
+            cout << ", times: " << firstTurnEnd << ':' << secondTurnStart << ':' << strikeTime;
+            if(swingTime >= 0)cout << ", swing: " << swingTime;
+            else if(puckPathLen)cout << ", pickup";
+            else cout << ", pass: " << passAngle << ", power: " << passPower;
+            if(targetIndex >= 0)cout << ", target: " << targetIndex;
+        }
         cout << endl;
         */
+
+        if(flags & MoveFlag::STOP)
+        {
+            move.setSpeedUp(0);  move.setTurn(0);  move.setAction(NONE);  return;
+        }
 
         if(!strikeTime)
         {
@@ -997,7 +1008,7 @@ struct MovePlan : public StrikeInfo
             {
                 move.setPassPower(passPower);  move.setPassAngle(passAngle);  move.setAction(PASS);
             }
-            *this = MovePlan();  return;
+            flags = MoveFlag::STOP;  return;
         }
 
         Helper helper(*this);  double accel = helper.accel(0);
@@ -1152,10 +1163,12 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
         */
         Vec2D target = puckPath[0].pos + 0.5 * enemyPuck->spd / hockeyistFrict;
 
-        Vec2D delta = target - pos;  plan = MovePlan();
+        Vec2D delta = target - pos;
         double turn = relAngle(atan2(delta.y, delta.x) - angle);
         plan.flags = (turn > 0 ? MoveFlag::FIRST_LEFT : MoveFlag::FIRST_RIGHT);
-        plan.firstTurnEnd = abs(turn) / turnAngle;  return false;
+        plan.firstTurnEnd = abs(turn) / turnAngle;
+        plan.secondTurnStart = maxLookahead;
+        plan.reset();  return false;
     }
 
     void fillMap()
