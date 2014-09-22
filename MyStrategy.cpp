@@ -164,12 +164,12 @@ inline constexpr Vec2D conj(const Vec2D &v)
 
 
 constexpr int maxLookahead = 256;
-constexpr int turnStep = 4, strikeStep = 6, strikeDelta = 8;
-constexpr int optSurvive = 4, optOffspring = 4, optStepCount = 2, optFinalCount = 6;
-constexpr double optStepBase = 4, optStepMul = 0.5;
+constexpr int turnStep = 4, strikeStep = 4, strikeDelta = 8;
+constexpr int optSurvive = 4, optOffspring = 4, optStepCount = 4, optFinalCount = 4;
+constexpr double optStepBase = 8, optStepMul = 0.5;
 
 constexpr double timeGamma = 1 - 1.0 / maxLookahead;
-constexpr double cellSize = 48;
+constexpr double cellSize = 32;
 
 constexpr double hockeyistFrict = 0.02, puckFrict = 0.001, puckBeta = -log(1 - puckFrict);
 constexpr double wallBounce = 0.25, hockeyistBounce = 0.325, goalieFrict = 0.1;
@@ -1234,7 +1234,7 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, AllyState>
 
     void execute(Move &move)
     {
-        if(swinging && plan.strikeTime)
+        if(swinging && (plan.strikeTime || plan.swingTime < 0))
         {
             move.setSpeedUp(0);  move.setTurn(0);  move.setAction(CANCEL_STRIKE);
         }
