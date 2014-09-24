@@ -1297,7 +1297,7 @@ struct AllyInfo : public HockeyistInfo, public Mapper<AllyInfo, StateScore<true>
 
     void execute(Move &move)
     {
-        if(swinging && (plan.strikeTime || plan.swingTime < 0))
+        if(swinging && ((plan.flags & MoveFlag::STOP) || plan.strikeTime || plan.swingTime < 0))
         {
             move.setSpeedUp(0);  move.setTurn(0);  move.setAction(CANCEL_STRIKE);
         }
