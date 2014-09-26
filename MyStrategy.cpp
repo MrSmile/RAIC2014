@@ -247,9 +247,8 @@ void initConsts(const Game& game, const World& world)
 
 inline int gridPos(const Vec2D &pos)
 {
-    Vec2D offs = (pos - rinkCenter) / cellSize;
-    int x = lround(offs.x), y = lround(offs.y);
-    return gridCenter + y * gridLine + x;
+    Vec2D offs = (pos - rinkCenter) / cellSize + Vec2D(gridHalfWidth + 0.5, gridHalfHeight + 0.5);
+    return int(offs.y) * gridLine + int(offs.x);
 }
 
 
@@ -658,14 +657,15 @@ bool validPuckPos(const Vec2D &pos)
 double checkSafety(const HockeyistInfo &info, int time)
 {
     if(checkGoalie(info.pos, hockeyistRad))return 0;
-    double res = (enemyMap.body[gridPos(info.pos)] <= time ? 0.5 : 0);
+
+    double res = 0;
     if(!puckPathLen)
     {
         Vec2D puck = puckPos(info, time);  if(!validPuckPos(puck))return 0;
         if(enemyMap.stick[gridPos(info.pos)] <= time)res = max(res, knockdownChance);
         if(enemyMap.stick[gridPos(puck)] <= time)res = max(res, strikeChance );
     }
-    return 1 - res / (1 + sqr(time / 50.0));
+    return 1 - res;
 }
 
 template<bool ally> struct StateScore : public HockeyistInfo
@@ -786,9 +786,8 @@ Sector estimateGoalAngle(const Vec2D &pos, const Vec2D &spd, double power, bool 
 
 double interceptProbability(const UnitInfo &info, int time)
 {
-    double chance = min(maxChance, strikeChance - chanceDrop * info.spd.len());
     if(enemyMap.stick[gridPos(info.pos)] > time)return 0;
-    return chance / (1 + sqr(time / 50.0));
+    return min(maxChance, strikeChance - chanceDrop * info.spd.len());
 }
 
 double checkInterception(const Vec2D &pos, const Vec2D &spd, int time, int duration)
@@ -887,6 +886,18 @@ struct StrikeInfo
         double duration = 1 - puckBeta * len / puckSpd;  if(!(duration > 0))return;
         duration = -log(duration) / puckBeta;
 
+        if(min(x, puck.x) < rinkLeft + (2 * hockeyistRad + puckRad))
+        {
+            double cross = delta % (Vec2D(rinkLeft + hockeyistRad, goalCenter) - puck);
+            double cmp = abs(delta.x) * goalieRange + (hockeyistRad + puckRad);
+            if(cross > -cmp && cross < cmp)return;
+        }
+        if(max(x, puck.x) > rinkRight - (2 * hockeyistRad + puckRad))
+        {
+            double cross = delta % (Vec2D(rinkRight - hockeyistRad, goalCenter) - puck);
+            double cmp = abs(delta.x) * goalieRange + (hockeyistRad + puckRad);
+            if(cross > -cmp && cross < cmp)return;
+        }
         val *= 1 - checkInterception(puck, puckSpd * delta, time, lround(duration));
         if(!(val > score))return;
 
@@ -1162,7 +1173,7 @@ template<bool ally> struct Optimizer : public Mapper<Optimizer<ally>, OptimizerS
         double delta = optStepBase;
         for(int i = 0; i < optStepCount; i++, delta *= optStepMul)
             optimizeMove(info, delta, optSurvive, optOffspring);
-        for(int i = 0; i < optFinalCount; i++, delta *= optStepMul)
+        if(ally)for(int i = 0; i < optFinalCount; i++, delta *= optStepMul)
             optimizeMove(info, delta, 1, optOffspring);
 
         const MovePlan *res = &old;
