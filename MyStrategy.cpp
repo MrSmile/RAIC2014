@@ -798,7 +798,18 @@ double checkInterception(const Vec2D &pos, const Vec2D &spd, int time, int durat
     {
         info.spd -= puckFrict * info.spd;  info.pos += info.spd;
         if(abs(info.pos.x - rinkCenter.x) > rinkWidth  / 2 + cellSize)break;
-        if(abs(info.pos.y - rinkCenter.y) > rinkHeight / 2 + cellSize)break;
+
+        double delta;
+        if((delta = rinkTop + puckRad - info.pos.y) > 0)
+        {
+            if(info.spd.y < 0)info.spd.y *= -wallBounce;
+            if(info.spd.y < delta)info.pos.y += depthFactor * (delta - minDepth);
+        }
+        if((delta = rinkBottom - puckRad - info.pos.y) < 0)
+        {
+            if(info.spd.y > 0)info.spd.y *= -wallBounce;
+            if(info.spd.y > delta)info.pos.y += depthFactor * (delta + minDepth);
+        }
         res = max(res, interceptProbability(info, time + i));
     }
     return res;
@@ -939,10 +950,13 @@ struct StrikeInfo
             if(time < puckPathLen)tryStrikeFlyby(time, mul);  return;
         }
 
+        double y1 = rinkTop + puckRad, y2 = rinkBottom + puckRad;
         for(size_t i = 0; i < targets.size(); i++)
         {
             double val = mul * targets[i].score;  if(!(val > score))continue;
             evaluatePass(info, puck, targets[i].x, targets[i].y, time, targets[i].time, val, i);
+            evaluatePass(info, puck, targets[i].x, y1 - (targets[i].y - y1) / wallBounce, time, targets[i].time, val, i);
+            evaluatePass(info, puck, targets[i].x, y2 - (targets[i].y - y2) / wallBounce, time, targets[i].time, val, i);
         }
     }
 
