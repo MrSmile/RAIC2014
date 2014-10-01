@@ -171,7 +171,7 @@ enum PuckStatus
 };
 
 constexpr int maxLookahead = 256;
-constexpr int turnStep = 4, strikeStep = 4, strikeDelta = 8;
+constexpr int turnStep = 4, strikeStep = 4, strikeDelta = 8, targetCount = 2;
 constexpr int optSurvive = 4, optOffspring = 4, optStepCount = 4, optFinalCount = 4;
 constexpr double optStepBase = 8, optStepMul = 0.5;
 
@@ -404,6 +404,41 @@ struct HockeyistState : public UnitState
         }
 
         pos += spd;  dir = rotate(dir, info.rot[time]);  dir = rotate(dir, turn);
+    }
+};
+
+struct SimplePuckState : public UnitState
+{
+    double spdLen;
+
+    SimplePuckState(const Vec2D &pos_, const Vec2D &spd_)
+    {
+        pos = pos_;  spd = spd_;  spdLen = spd.len();
+    }
+
+    bool nextStep()
+    {
+        spd -= puckFrict * spd;  spdLen -= puckFrict * spdLen;  pos += spd;
+        if(abs(pos.x - rinkCenter.x) > rinkWidth / 2 + cellSize)return false;
+
+        double delta;
+        if((delta = rinkTop + puckRad - pos.y) > 0)
+        {
+            if(spd.y < 0)
+            {
+                spd.y *= -wallBounce;  spdLen = spd.len();
+            }
+            if(spd.y < delta)pos.y += depthFactor * (delta - minDepth);
+        }
+        if((delta = rinkBottom - puckRad - pos.y) < 0)
+        {
+            if(spd.y > 0)
+            {
+                spd.y *= -wallBounce;  spdLen = spd.len();
+            }
+            if(spd.y > delta)pos.y += depthFactor * (delta + minDepth);
+        }
+        return true;
     }
 };
 
@@ -840,33 +875,19 @@ Sector estimateGoalAngle(const Vec2D &pos, const Vec2D &spd, double power, bool 
     return Sector(dir * norm, cross * norm, time);
 }
 
-double interceptProbability(const UnitState &state, int time)
+double interceptProbability(const Vec2D &pos, double spd, int time)
 {
-    if(enemyMap.stick[gridPos(state.pos)] > time)return 0;
-    return min(maxChance, 1 + strikeChance - chanceDrop * state.spd.len());
+    if(enemyMap.stick[gridPos(pos)] > time)return 0;
+    return min(maxChance, 1 + strikeChance - chanceDrop * spd);
 }
 
 double checkInterception(const Vec2D &pos, const Vec2D &spd, int time, int duration)
 {
-    UnitState state;  double res = 0;
-    state.pos = pos;  state.spd = spd;
+    SimplePuckState puck(pos, spd);  double res = 0;
     for(int i = 1; i <= duration; i++)
     {
-        state.spd -= puckFrict * state.spd;  state.pos += state.spd;
-        if(abs(state.pos.x - rinkCenter.x) > rinkWidth / 2 + cellSize)break;
-
-        double delta;
-        if((delta = rinkTop + puckRad - state.pos.y) > 0)
-        {
-            if(state.spd.y < 0)state.spd.y *= -wallBounce;
-            if(state.spd.y < delta)state.pos.y += depthFactor * (delta - minDepth);
-        }
-        if((delta = rinkBottom - puckRad - state.pos.y) < 0)
-        {
-            if(state.spd.y > 0)state.spd.y *= -wallBounce;
-            if(state.spd.y > delta)state.pos.y += depthFactor * (delta + minDepth);
-        }
-        res = max(res, interceptProbability(state, time + i));
+        if(!puck.nextStep())break;
+        res = max(res, interceptProbability(puck.pos, puck.spdLen, time + i));
     }
     return res;
 }
@@ -1614,7 +1635,7 @@ void MyStrategy::move(const model::Hockeyist& self, const model::World& world, c
             for(; time <= maxLookahead; time++)
             {
                 if((flag = puck.nextStep()))break;
-                intercept = max(intercept, interceptProbability(puck, time));
+                intercept = max(intercept, interceptProbability(puck.pos, puck.spd.len(), time));
                 puckPath[time].set(puck, time, intercept);
             }
             puckPathLen = time;  goalFlag = leftPlayer ? flag : -flag;
@@ -1631,7 +1652,7 @@ void MyStrategy::move(const model::Hockeyist& self, const model::World& world, c
                 allyPuck = &*ally;  ally->activePlan = true;
             }
             else ally->fillMap();
-        chooseBest(targets, 8);
+        chooseBest(targets, targetCount);
 
         if(!allyPuck && goalFlag <= 0)
         {
