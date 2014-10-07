@@ -144,6 +144,7 @@ constexpr double goalCenter = 460, goalHalf = 100, hockeyistRad = 30, puckRad = 
 constexpr double hockeyistFrict = 0.02, puckFrict = 0.001, puckBeta = -log(1 - puckFrict);
 constexpr double wallCoeff = 0.25, goalieCoeff = 0.325, goalieFrict = 0.1;
 constexpr double minDepth = 0.01, depthFactor = 0.8;
+constexpr int goalieTime = 999999;
 
 
 struct Sector
@@ -159,33 +160,41 @@ struct Sector
 
 struct GoalHelper
 {
-    Vec2D dir, bonus;
-    double rad, power, dist, offs, end;
+    Vec2D start, bonus, dir;
+    double rad, power, dist, offs, end, duration;
 
-    GoalHelper(const Vec2D &pos, const Vec2D &spd, double power_) :
-        dir(pos), bonus(spd), rad(hockeyistRad + puckRad), power(power_)
+    GoalHelper(const Vec2D &pos, const Vec2D &spd, double power_, bool right) :
+        start(pos), bonus(spd), rad(hockeyistRad + puckRad), power(power_)
     {
-    }
-
-    void flipHorz()
-    {
-        dir.x = 2 * rinkCenter.x - dir.x;  bonus.x = -bonus.x;
-    }
-
-    void flipVert()
-    {
-        dir.y = 2 * goalCenter - dir.y;  bonus.y = -bonus.y;
+        if(right)
+        {
+            start.x = 2 * rinkCenter.x - start.x;  bonus.x = -bonus.x;
+        }
+        if(pos.y < goalCenter)
+        {
+            start.y = 2 * goalCenter - start.y;  bonus.y = -bonus.y;
+        }
     }
 
     bool init()
     {
-        dir -= Vec2D(rinkLeft, goalCenter - goalHalf);
-        dist = dir.x - hockeyistRad;  if(!(dist > rad))return false;
-        offs = max(0.0, dir.y - 2 * goalHalf);  dir = normalize(dir);
-        return true;
+        start -= Vec2D(rinkLeft, goalCenter - goalHalf);
+        dist = start.x - hockeyistRad;  if(!(dist > rad))return false;
+        offs = max(0.0, start.y - goalHalf - goalieRange);
+        dir = start = normalize(start);  return true;
     }
 
-    bool iterate(bool first)
+    void withoutGoalie()
+    {
+        start -= Vec2D(rinkLeft, goalCenter - goalHalf);
+        dir = normalize(Vec2D(start.x, start.y - goalHalf - goalieRange));
+        double len = start.len();  start /= len;
+
+        double end = len / (power - bonus * start);
+        duration = -log(1 - puckBeta * end) / puckBeta;
+    }
+
+    template<bool first> bool iterate()
     {
         double invSpd = 1 / (power - bonus * dir), cmp = 0;
         end = (dist - rad * dir.y) * invSpd;
@@ -203,23 +212,28 @@ struct GoalHelper
         double len = goalieSpd * (end - beg) + offs;  if(first && !(len < cmp))return false;
         double w = dist * dist + len * len, z = sqrt(w - rad * rad);
         dir = Vec2D(dist * z - len * rad, len * z + dist * rad) / w;
-        return true;
+        if(first)duration = end;  return true;
+    }
+
+    Sector result(const Vec2D &pos, bool right) const
+    {
+        double dot = dir * start, cross = dir % start;
+        double norm = 1 / sqrt(2 + 2 * dot);  Vec2D res = dir + start;
+        if(!right)res.x = -res.x;  if(!(pos.y < goalCenter))res.y = -res.y;
+        return Sector(res * norm, cross * norm, duration);
     }
 };
 
 Sector estimateGoalAngle(const Vec2D &pos, const Vec2D &spd, double power, bool right)
 {
-    GoalHelper helper(pos, spd, power);
-    if(right)helper.flipHorz();  if(pos.y < goalCenter)helper.flipVert();
-
-    if(!helper.init())return Sector();  Vec2D dir = helper.dir;
-    if(!helper.iterate(true))return Sector();  double time = helper.end;
-    for(int i = 0; i < 3; i++)helper.iterate(false);
-
-    double dot = helper.dir * dir, cross = helper.dir % dir;
-    double norm = 1 / sqrt(2 + 2 * dot);  dir += helper.dir;
-    if(!right)dir.x = -dir.x;  if(!(pos.y < goalCenter))dir.y = -dir.y;
-    return Sector(dir * norm, cross * norm, time);
+    GoalHelper helper(pos, spd, power, right);
+    if(goalieTime > 0)
+    {
+        if(!helper.init())return Sector();
+        if(!helper.iterate<true>())return Sector();
+        for(int i = 0; i < 3; i++)helper.iterate<false>();
+    }
+    else helper.withoutGoalie();  return helper.result(pos, right);
 }
 
 
