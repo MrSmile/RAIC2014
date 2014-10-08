@@ -1011,7 +1011,7 @@ struct StrikeInfo
         if(ally)
         {
             Vec2D dir = res.dir;  // TODO: better approx
-            val *= 1 - checkInterception(puck, (power + state.spd * dir) * dir, time, lround(res.time));
+            val *= 1 - checkInterception(puck, (power + state.spd * dir) * dir, time + swing, lround(res.time));
             if(!(val > score))return;
         }
 
@@ -1095,6 +1095,20 @@ struct StrikeInfo
 
         if(!puckPathLen)tryPass(state, puck, info.passBase, time, mul);
         else if(time < puckPathLen)tryStrikeFlyby(strike, time, mul);
+    }
+
+    template<bool ally> void trySwing(const HockeyistInfo &info, const StateScore<ally> &state, int swing, int time)
+    {
+        double val = state.multiplier();  Vec2D puck;
+        if(!puckPathLen)puck = puckPos(info, state, time);
+        else
+        {
+            if(!inStrikeSector(state, puck = puckPath[time].pos))return;
+            double strike = info.attack[puckPath[time].status] - puckPath[time].chanceDrop;
+            val *= toChance(strike) * (1 - puckPath[time].intercept);
+        }
+        if(val > score)evaluateStrike<ally>(state, puck,
+            info.strikeBase + info.strikeGrowth * swing, info.strikeBeta, time, 0, val);
     }
 
     bool operator < (const StrikeInfo &info) const
@@ -1244,6 +1258,15 @@ struct MovePlan : public StrikeInfo
         }
     }
 
+    template<bool ally> void evaluateSwing(const HockeyistInfo &info, const HockeyistState &state, int swing)
+    {
+        reset();  StateScore<ally> cur = state;  trySwing<ally>(info, cur, swing, 0);
+        for(int i = swing + 1; i <= maxSwing; i++)
+        {
+            cur.nextStep(info, 0, Vec2D(1, 0), i);  trySwing<ally>(info, cur, i, i - swing);
+        }
+    }
+
     static int mutate(double &val, double step, double minVal, double maxVal)
     {
         val += step * frand();
@@ -1267,8 +1290,14 @@ struct MovePlan : public StrikeInfo
         if(ally)evaluate<true>(info, state);  else evaluate<false>(info, state);
     }
 
-    void execute(const HockeyistInfo &info, model::Move &move) const
+    void execute(const HockeyistInfo &info, model::Move &move, int swinging) const
     {
+        if(swinging)
+        {
+            move.setAction(strikeTime ? model::CANCEL_STRIKE : (swingTime ? model::SWING : model::STRIKE));
+            move.setSpeedUp(0);  move.setTurn(0);  return;
+        }
+
         if(strikeTime)
         {
             Helper helper(info, *this);  double accel = helper.accel(0);
@@ -1444,8 +1473,11 @@ struct EnemyInfo : public HockeyistInfo, public HockeyistState, public Optimizer
 
     const MovePlan &choosePuckMove()
     {
-        if(swinging)return plan;  Optimizer<false>::fillMap(*this, *this);
-        findBestMove(*this, *this, plan);  return plan;
+        if(!swinging)
+        {
+            Optimizer<false>::fillMap(*this, *this);  findBestMove(*this, *this, plan);
+        }
+        else plan.evaluateSwing<false>(*this, *this, swinging);  return plan;
     }
 
     void execute()
@@ -1560,7 +1592,12 @@ struct AllyInfo : public HockeyistInfo, public HockeyistState, public Optimizer<
 
     const MovePlan &chooseInterceptMove()
     {
-        if(swinging || knockdown)return plan[MAIN];
+        if(knockdown)return plan[activePlan = ATTACK] = plan[DEFENCE] = MovePlan();
+        if(swinging)
+        {
+            plan[ATTACK] = plan[DEFENCE] = MovePlan();
+            plan[MAIN].evaluateSwing<true>(*this, *this, swinging);  return plan[activePlan = MAIN];
+        }
 
         activePlan = ATTACK;
         if(enemyPuck)plan[ATTACK].followPlace(*this, *this, puckPath[0].pos + enemyPuck->spd * (0.5 / hockeyistFrict));
@@ -1574,8 +1611,11 @@ struct AllyInfo : public HockeyistInfo, public HockeyistState, public Optimizer<
 
     const MovePlan &choosePuckMove()
     {
-        if(swinging)return plan[MAIN];  Optimizer<true>::fillMap(*this, *this);
-        findBestMove(*this, *this, plan[MAIN]);  return plan[MAIN];
+        if(!swinging)
+        {
+            Optimizer<true>::fillMap(*this, *this);  findBestMove(*this, *this, plan[MAIN]);
+        }
+        else plan[MAIN].evaluateSwing<true>(*this, *this, swinging);  return plan[MAIN];
     }
 
     void substitute(const SubstituteInfo &sub)
@@ -1590,17 +1630,12 @@ struct AllyInfo : public HockeyistInfo, public HockeyistState, public Optimizer<
 
     void doNothing()
     {
-        activePlan = ATTACK;  plan[ATTACK] = MovePlan();
+        plan[activePlan = ATTACK] = plan[DEFENCE] = MovePlan();
     }
 
     void execute(model::Move &move)
     {
-        const MovePlan &cur = plan[activePlan];
-        if(swinging && ((cur.flags & MoveFlag::STOP) || cur.strikeTime || cur.swingTime < 0))
-        {
-            move.setSpeedUp(0);  move.setTurn(0);  move.setAction(model::CANCEL_STRIKE);
-        }
-        else cur.execute(*this, move);
+        plan[activePlan].execute(*this, move, swinging);
         for(int i = 0; i < PLAN_TYPE_COUNT; i++)plan[i].skipTurn();
 
 #ifdef PRINT_LOG
