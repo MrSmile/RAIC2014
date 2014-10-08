@@ -808,7 +808,7 @@ struct EnemyMap
 
 struct TargetPlace
 {
-    Vec2D pos, dir;
+    Vec2D pos, view;
 };
 
 struct PassTarget;
@@ -1245,10 +1245,11 @@ struct MovePlan : public StrikeInfo
         return info.followRotCoeff * dirFactor - info.followMoveCoeff * (pos - place.pos).sqr();
     }
 
-    void tryPlace(const HockeyistInfo &info, const Vec2D &pos, const Vec2D &dir,
+    void tryPlace(const HockeyistInfo &info, const Vec2D &pos, const Vec2D &end, const Vec2D &dir,
         const TargetPlace &place, int flags_, double turnTime, int endTime, double val)
     {
-        val += placeScore(info, pos, place, dir * place.dir) - endTime;  if(!(val > score))return;
+        Vec2D view = normalize(place.view - pos);
+        val += placeScore(info, end, place, dir * view) - endTime;  if(!(val > score))return;
 
         *static_cast<StrikeInfo *>(this) = StrikeInfo(endTime, val);
         flags = flags_ | MoveFlag::STOP;  firstTurnEnd = turnTime;  secondTurnStart = endTime;
@@ -1273,17 +1274,21 @@ struct MovePlan : public StrikeInfo
     {
         HockeyistState cur = state;  Helper helper(info, *this);
         for(int i = 0; i < strikeTime; i++)cur.nextStep(info, helper.accel(i), helper.turn(i), i + 1);
-        Vec2D pos = cur.pos + cur.spd / hockeyistFrict;
-
-        if(flags & MoveFlag::SUBSTITUTE)score = substituteScore(info, pos) - strikeTime;
-        else if((flags & MoveFlag::ROTATE_ONLY) || !strikeTime)
+        Vec2D end = cur.pos + cur.spd / hockeyistFrict;
+        if(flags & MoveFlag::SUBSTITUTE)
         {
-            Vec2D delta = rotate(place.dir, conj(state.dir));  double turn = atan2(delta.y, delta.x);
+            score = substituteScore(info, end) - strikeTime;  return;
+        }
+
+        Vec2D view = normalize(place.view - cur.pos);
+        if((flags & MoveFlag::ROTATE_ONLY) || !strikeTime)
+        {
+            Vec2D delta = rotate(view, conj(state.dir));  double turn = atan2(delta.y, delta.x);
             flags = (turn > 0 ? MoveFlag::FIRST_LEFT : MoveFlag::FIRST_RIGHT) | MoveFlag::ROTATE_ONLY | MoveFlag::STOP;
             firstTurnEnd = abs(turn) / info.turnAngle;  secondTurnStart = strikeTime = int(firstTurnEnd + 1);
-            score = val + placeScore(info, pos, place, 1);
+            score = val + placeScore(info, end, place, 1);
         }
-        else score = val + placeScore(info, pos, place, cur.dir * place.dir) - strikeTime;
+        else score = val + placeScore(info, end, place, cur.dir * view) - strikeTime;
     }
 
     template<bool ally> void evaluate(const HockeyistInfo &info, const HockeyistState &state)
@@ -1600,8 +1605,8 @@ struct AllyInfo : public HockeyistInfo, public HockeyistState, public Optimizer<
         Vec2D end = state.pos + state.spd / hockeyistFrict;
         if(substitutes.size() && substitutes[0].stamina > stamina)
             plan[ATTACK].trySubstitute(info, end, substitutes[0].index, flags, turnTime, time);
-        else if(!enemyPuck)plan[ATTACK].tryPlace(info, end, state.dir, attackPlace, flags, turnTime, time, staminaBias);
-        plan[DEFENCE].tryPlace(info, end, state.dir, defencePlace, flags, turnTime, time, defenceBias);
+        else if(!enemyPuck)plan[ATTACK].tryPlace(info, state.pos, end, state.dir, attackPlace, flags, turnTime, time, staminaBias);
+        plan[DEFENCE].tryPlace(info, state.pos, end, state.dir, defencePlace, flags, turnTime, time, defenceBias);
 
         Vec2D puck = state.pos + effStickLength * state.dir;
         if(!validPuckPos(puck))return;  int cell = gridPos(puck);
@@ -1782,15 +1787,15 @@ void createPlan(PuckState &puck, bool freePuck)
         if(enemy->havePuck)enemyPuck = &*enemy;
         else enemyMap.fillMap(*enemy, *enemy);
     }
-    enemyMap.filter();  avg/= enemies.size();
+    enemyMap.filter();  avg /= enemies.size();
 
     double offs = 1.5 * goalHalf;
-    attackPlace.pos  = rinkCenter + Vec2D(0, avg.y > rinkCenter.y ? -offs : offs);
-    attackPlace.dir = Vec2D(leftPlayer ? 1 : -1, 0);
+    attackPlace.pos = rinkCenter + Vec2D(0, avg.y > rinkCenter.y ? -offs : offs);
+    attackPlace.view = attackPlace.pos + Vec2D(leftPlayer ? effStickLength : -effStickLength, 0);
 
     offs = rinkWidth / 2 - (goalieTime > 0 ? goalHalf : hockeyistRad);
     defencePlace.pos = rinkCenter + Vec2D(leftPlayer ? -offs : offs, 0);
-    defencePlace.dir = normalize(puckPath[0].pos - defencePlace.pos);
+    defencePlace.view = defencePlace.pos + effStickLength * normalize(puckPath[0].pos - defencePlace.pos);
 
     if(freePuck)
     {
