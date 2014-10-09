@@ -179,7 +179,7 @@ constexpr double optStepBase = 8, optStepMul = 0.5;
 
 constexpr double cellSize = 32;
 constexpr double timeGamma = 1 - 1.0 / maxLookahead;
-constexpr double dangerMultiplier = 10, passMultiplier = 0.1;
+constexpr double dangerMultiplier = 10, passBonus = 2, passMultiplier = 0.1;
 constexpr double followScore = 0.1;
 
 constexpr double hockeyistFrict = 0.02, angularFrict = 0.0270190131;
@@ -1403,7 +1403,7 @@ struct PassTarget : public Vec2D, public MovePlan
 
     PassTarget(AllyInfo *rcv, const HockeyistInfo &info, const MovePlan &plan) : Vec2D(plan.strikePos), MovePlan(plan), receiver(rcv)
     {
-        spd = (info.attack[FLY] - pickChanceDelta[FLY] - maxChance) / chanceDrop;
+        spd = (info.attack[FLY] - pickChanceDelta[FLY] - maxChance) / chanceDrop;  score *= passBonus;
     }
 
     PassTarget(AllyInfo *rcv, const HockeyistInfo &info, const Vec2D &puck, int flags, double turnTime, int strikeTime, double score) :
