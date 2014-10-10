@@ -126,6 +126,11 @@ inline constexpr Vec2D sincos(double angle)
     return Vec2D(cos(angle), sin(angle));
 }
 
+inline constexpr Vec2D rotate(const Vec2D &v1, const Vec2D &v2)
+{
+    return Vec2D(v1.x * v2.x - v1.y * v2.y, v1.x * v2.y + v1.y * v2.x);
+}
+
 inline constexpr Vec2D conj(const Vec2D &v)
 {
     return Vec2D(v.x, -v.y);
@@ -135,8 +140,10 @@ inline constexpr Vec2D conj(const Vec2D &v)
 struct Info
 {
     static constexpr int n = 1;
+    static constexpr double stickLength = 120, stickSector = pi / 6;
     static constexpr double accelF = 25.0 / 216, accelB = -0.75 * accelF;
     static constexpr double frict = 0.02, turn = pi / 60;
+    static constexpr double maxTurnSteps = (pi / 2) / turn;
 
     Vec2D pos, spd;
     double angle;
@@ -248,9 +255,62 @@ void generateEdge(int steps)
 }
 
 
+constexpr double stepValue(double val)
+{
+    return val < 0 ? 0 : (val > 1 ? 1 : val);
+}
+
+void printTrajectory(double turnTime, bool back, bool right, const Vec2D &offs)
+{
+    constexpr int step = 6, maxTime = 4 * step;
+
+    double turn = (right ? -Info::turn : Info::turn);
+    double accTime = turnTime - Info::maxTurnSteps;
+    double accBase = Info::accelF, accDelta = Info::accelB;
+    if(back)swap(accBase, accDelta);  accDelta -= accBase;
+    Info info;  info.init();  cout << offs.x << ' ' << offs.y;
+    for(int time = 0; time < maxTime; time++)
+    {
+        info.next(accBase + accDelta * stepValue(accTime - time), turn * stepValue(turnTime - time));
+        if((time + 1) % step)continue;
+
+        Vec2D pt = info.pos + rotate(offs, sincos(info.angle));  cout << ' ' << pt.x << ' ' << pt.y;
+    }
+    cout << endl;
+}
+
+void printStrikeZone()
+{
+    constexpr double step = 1, alpha = Info::stickSector / 16;
+    for(double turn = 0; turn < Info::maxTurnSteps; turn += step)
+        printTrajectory(turn, false, false, Vec2D(Info::stickLength, 0));
+    for(double angle = 0; angle < Info::stickSector; angle += alpha)
+        printTrajectory(Info::maxTurnSteps, false, false, Info::stickLength * sincos(angle));
+    for(double turn = Info::maxTurnSteps; turn < 2 * Info::maxTurnSteps; turn += step)
+        printTrajectory(turn, false, false, Info::stickLength * sincos(Info::stickSector));
+    printTrajectory(2 * Info::maxTurnSteps, false, false, Vec2D(0, 0));
+    printTrajectory(0, true, false, Info::stickLength * sincos(Info::stickSector));
+    for(double turn = Info::maxTurnSteps; turn > 0; turn -= step)
+        printTrajectory(turn, true, false, Vec2D(0, 0));
+    for(double turn = 0; turn < Info::maxTurnSteps; turn += step)
+        printTrajectory(turn, true, true, Vec2D(0, 0));
+    printTrajectory(0, true, true, Info::stickLength * sincos(-Info::stickSector));
+    printTrajectory(2 * Info::maxTurnSteps, false, true, Vec2D(0, 0));
+    for(double turn = 2 * Info::maxTurnSteps; turn > Info::maxTurnSteps; turn -= step)
+        printTrajectory(turn, false, true, Info::stickLength * sincos(-Info::stickSector));
+    for(double angle = Info::stickSector; angle > 0; angle -= alpha)
+        printTrajectory(Info::maxTurnSteps, false, true, Info::stickLength * sincos(-angle));
+    for(double turn = Info::maxTurnSteps; turn > 0; turn -= step)
+        printTrajectory(turn, false, true, Vec2D(Info::stickLength, 0));
+    printTrajectory(0, false, true, Vec2D(Info::stickLength, 0));
+}
+
+
 int main()
 {
+    cout << scientific << setprecision(5);
     //sweep(128, 0, 1);
-    generateEdge(64);
+    //generateEdge(64);
+    printStrikeZone();
     return 0;
 }
