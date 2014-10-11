@@ -1136,7 +1136,18 @@ struct StrikeInfo
         }
         else
         {
-            double bonus = (ally && puckPathLen ? safety.multiply(mul * currentDanger) : 0);
+            double bonus = 0;
+            if(ally && puckPathLen)
+            {
+                double autoGoal = 0;
+                Sector res = estimateGoalAngle(puck, state.spd, info.strikeBase, !leftPlayer);
+                if(res.span > 0)
+                {
+                    Vec2D offs = rotate(res.dir, conj(state.dir));
+                    if(offs.x > 0)autoGoal = probFactor(info.strikeBeta, abs(offs.y), res.span);
+                }
+                bonus = safety.multiply(mul * currentDanger) * (1 - autoGoal);
+            }
             if(!(safety.multiply(mul) + bonus > score))return;
             evaluateStrike<ally>(state, puck, info.strikeBase, info.strikeBeta, 0, time, mul, safety, bonus);
         }
@@ -1664,6 +1675,16 @@ struct AllyInfo : public HockeyistInfo, public HockeyistState, public Optimizer<
     bool tryKnockout()
     {
         if(!enemyPuck || cooldown || !inStrikeSector(*this, puckPath[0].pos))return false;
+
+        double autoGoal = 0;
+        Sector res = estimateGoalAngle(puckPath[0].pos, spd, strikeBase, !leftPlayer);
+        if(res.span > 0)
+        {
+            Vec2D offs = rotate(res.dir, conj(dir));
+            if(offs.x > 0)autoGoal = probFactor(strikeBeta, abs(offs.y), res.span);
+        }
+        if(autoGoal > 1e-3)return false;
+
         plan[MAIN] = MovePlan();  plan[MAIN].flags = 0;  activePlan = MAIN;  return true;
     }
 
